@@ -1,0 +1,4 @@
+interface:
+  display_name: "Договоры и изменения"
+  short_description: "Контролирует обязательства, изменения и платежи"
+  default_prompt: "Используй $control-contract-and-changes, чтобы проверить исполнение договора и оформить изменение работ."

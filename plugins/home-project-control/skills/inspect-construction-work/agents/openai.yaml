@@ -1,0 +1,4 @@
+interface:
+  display_name: "Приёмка строительных работ"
+  short_description: "Готовит и документирует проверку качества работ"
+  default_prompt: "Используй $inspect-construction-work, чтобы подготовить приёмку этапа и зафиксировать замечания."

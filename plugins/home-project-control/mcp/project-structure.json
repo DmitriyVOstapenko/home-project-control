@@ -1,0 +1,45 @@
+{
+  "plugin_id": "home-project-control",
+  "structure_version": "1.0",
+  "folders": [
+    "00_Паспорт_проекта",
+    "01_Обмеры_и_исходные_данные",
+    "02_Проекты_и_технические_решения",
+    "03_Коммерческие_предложения",
+    "04_Сметы",
+    "05_Договоры",
+    "06_Закупки",
+    "07_Фото_и_ход_работ",
+    "08_Акты_и_приемка",
+    "09_Счета_чеки_и_платежи",
+    "10_Изменения_и_замечания",
+    "11_Гарантии_и_исполнительная_документация",
+    "12_Обследования_и_испытания",
+    "13_Эксплуатация_и_обслуживание"
+  ],
+  "control_directories": [
+    ".home-control",
+    ".home-control/reports"
+  ],
+  "json_files": {
+    ".home-control/documents.json": {
+      "schema_version": "1.0",
+      "indexed_at_utc": null,
+      "items": []
+    }
+  },
+  "jsonl_files": [
+    ".home-control/facts.jsonl",
+    ".home-control/decisions.jsonl",
+    ".home-control/comparables.jsonl"
+  ],
+  "csv_files": {
+    ".home-control/costs.csv": ["cost_id", "date", "work_item_id", "category", "supplier", "description", "amount", "currency", "status", "evidence_document_id", "evidence_locator", "notes"],
+    ".home-control/work_items.csv": ["work_item_id", "system", "title", "contractor", "planned_start", "planned_finish", "status", "progress_percent", "planned_cost", "currency", "acceptance_document_id", "last_update", "notes"],
+    ".home-control/issues.csv": ["issue_id", "work_item_id", "severity", "status", "description", "owner", "due_date", "evidence_document_id", "notes"],
+    ".home-control/changes.csv": ["change_id", "date", "work_item_id", "initiator", "description", "reason", "amount_delta", "currency", "schedule_impact", "status", "decision_id", "evidence_document_id", "evidence_locator", "notes"],
+    ".home-control/commitments.csv": ["commitment_id", "party", "description", "due_date_or_event", "status", "source_document_id", "source_locator", "closure_document_id", "closure_locator", "notes"],
+    ".home-control/acceptance.csv": ["acceptance_id", "work_item_id", "date", "presented_scope", "status", "inspector", "evidence_document_id", "evidence_locator", "open_issue_ids", "notes"],
+    ".home-control/procurement.csv": ["procurement_id", "work_item_id", "item", "manufacturer", "model", "quantity", "unit", "required_by", "supplier", "status", "amount", "currency", "evidence_document_id", "notes"]
+  }
+}

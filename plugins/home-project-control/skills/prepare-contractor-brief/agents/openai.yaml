@@ -1,0 +1,4 @@
+interface:
+  display_name: "Задание для подрядчиков"
+  short_description: "Готовит сопоставимое задание для получения смет"
+  default_prompt: "Используй $prepare-contractor-brief, чтобы подготовить единое задание для подрядчиков."

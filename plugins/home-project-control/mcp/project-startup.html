@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Мастер проекта</title>
+  <style>
+    :root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--accent:#2563eb;--ok:#15803d;--warn:#b45309;--danger:#dc2626;--muted:#64748b;--border:color-mix(in srgb,CanvasText 16%,transparent);--soft:color-mix(in srgb,CanvasText 5%,transparent)}
+    *{box-sizing:border-box}body{margin:0;padding:14px;background:Canvas;color:CanvasText}.shell{max-width:900px;margin:auto}h1{font-size:23px;line-height:1.25;margin:0 0 5px}.lead{margin:0 0 14px;color:var(--muted);font-size:14px}.diagnosis{display:grid;gap:7px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--border);border-radius:13px;background:var(--soft);font-size:13px}.diagnosis strong{font-size:14px}.path{overflow-wrap:anywhere;color:var(--muted)}.badge{justify-self:start;padding:4px 8px;border-radius:999px;background:color-mix(in srgb,var(--warn) 13%,Canvas);color:var(--warn);font-weight:700}.badge.ok{background:color-mix(in srgb,var(--ok) 13%,Canvas);color:var(--ok)}form{display:grid;gap:12px}.choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.choice{display:flex;gap:10px;align-items:flex-start;padding:13px;border:1px solid var(--border);border-radius:12px;background:Canvas;cursor:pointer;min-height:92px}.choice:has(input:checked){border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,Canvas)}.choice input{appearance:none;display:grid;place-content:center;margin-top:2px;width:19px;height:19px;border:1.5px solid var(--border);border-radius:5px;background:Canvas;flex:none}.choice input::before{content:"✓";color:white;font-size:14px;font-weight:800;line-height:1;transform:scale(0)}.choice input:checked{border-color:var(--accent);background:var(--accent)}.choice input:checked::before{transform:scale(1)}.choice input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.choice strong{display:block;margin-bottom:4px}.choice small{display:block;color:var(--muted);line-height:1.35}.details{display:none;gap:10px;padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--soft)}.details.visible{display:grid}.field{display:grid;gap:5px;font-size:13px;font-weight:700}.field input{width:100%;padding:10px 11px;border:1px solid var(--border);border-radius:9px;background:Canvas;color:CanvasText;font:inherit}.hint{margin:0;color:var(--muted);font-size:12px}.problems{display:none;margin:0;padding-left:20px;color:var(--muted);font-size:12px}.problems.visible{display:block}.actions{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--border);border-radius:13px;background:Canvas}button{border:0;border-radius:10px;padding:11px 17px;background:var(--accent);color:white;font:inherit;font-weight:800;cursor:pointer}button:disabled{opacity:.55;cursor:wait}#status{font-size:13px;color:var(--muted)}#status.ok{color:var(--ok)}#status.warn{color:var(--warn)}#status.error{color:var(--danger)}[hidden]{display:none!important}@media(max-width:720px){body{padding:10px}.choices{grid-template-columns:1fr}.choice{min-height:auto}.actions{align-items:flex-start;flex-direction:column}button{width:100%}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <h1>Выберите проект для работы</h1>
+  <p class="lead">Текущая папка уже проверена автоматически. Выберите дальнейшее действие.</p>
+  <section class="diagnosis" aria-live="polite">
+    <strong id="diagnosisTitle">Проверяю текущую папку…</strong>
+    <span id="diagnosisBadge" class="badge">Проверка</span>
+    <span id="workspace" class="path"></span>
+    <ul id="problems" class="problems"></ul>
+  </section>
+
+  <form id="setup">
+    <div class="choices">
+      <label class="choice">
+        <input type="radio" name="action" value="select_existing" required>
+        <span><strong>Выбрать существующий проект</strong><small>Указать папку проекта, ранее созданного плагином.</small></span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="action" value="create_new" required>
+        <span><strong>Создать новый проект</strong><small>Задать название и полный путь к его папке.</small></span>
+      </label>
+      <label id="repairChoice" class="choice" hidden>
+        <input type="radio" name="action" value="repair_current">
+        <span><strong>Восстановить текущий проект</strong><small id="repairDescription">Создать только отсутствующие элементы структуры.</small></span>
+      </label>
+    </div>
+
+    <section id="existingDetails" class="details">
+      <label class="field">Полный путь к папке существующего проекта
+        <input id="existingPath" type="text" maxlength="1024" placeholder="Например: C:\Проекты\Дом на Новой">
+      </label>
+      <p class="hint">Если папка находится не в текущем проекте Codex, после проверки её потребуется открыть как рабочую папку задачи.</p>
+    </section>
+
+    <section id="newDetails" class="details">
+      <label class="field">Название проекта
+        <input id="projectName" type="text" maxlength="200" placeholder="Например: Дом на Новой">
+      </label>
+      <label class="field">Полный путь к папке проекта
+        <input id="newPath" type="text" maxlength="1024" placeholder="Например: C:\Проекты\Дом на Новой">
+      </label>
+      <p class="hint">Плагин создаст только отсутствующие папки и служебные файлы. Существующие документы не удаляются и не заменяются.</p>
+    </section>
+
+    <section id="repairDetails" class="details">
+      <p id="repairHint" class="hint">Будут созданы только отсутствующие папки и служебные файлы, перечисленные выше. Существующие файлы не перезаписываются.</p>
+    </section>
+
+    <div class="actions">
+      <button id="submit" type="submit">Продолжить</button>
+      <span id="status" role="status" aria-live="polite">Выберите один вариант.</span>
+    </div>
+  </form>
+</main>
+<script>
+  const form=document.getElementById("setup"),button=document.getElementById("submit"),status=document.getElementById("status"),workspace=document.getElementById("workspace"),diagnosisTitle=document.getElementById("diagnosisTitle"),diagnosisBadge=document.getElementById("diagnosisBadge"),problems=document.getElementById("problems"),repairChoice=document.getElementById("repairChoice"),repairDescription=document.getElementById("repairDescription"),repairHint=document.getElementById("repairHint"),existingDetails=document.getElementById("existingDetails"),newDetails=document.getElementById("newDetails"),repairDetails=document.getElementById("repairDetails"),existingPath=document.getElementById("existingPath"),newPath=document.getElementById("newPath"),projectName=document.getElementById("projectName");
+  const pending=new Map();let requestId=1,current={workspacePath:"",diagnosis:{},prefill:{}};
+  const labels={first_run:"Проект плагина не найден",structure_without_project_marker:"Обнаружена неполная структура без карточки проекта",project_structure_incomplete:"В проекте отсутствует часть структуры",project_structure_invalid:"Структура проекта повреждена",folder_binding_mismatch:"Папка не совпадает с привязкой проекта",project_marker_invalid:"Карточка проекта повреждена",existing_project_ready:"Проект готов к работе"};
+  function rpc(method,params,timeoutMs=8000){const id=requestId++;window.parent.postMessage({jsonrpc:"2.0",id,method,params},"*");return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error("Нет ответа от интерфейса чата"))},timeoutMs);pending.set(id,{resolve,reject,timer})})}
+  window.addEventListener("message",event=>{if(event.source!==window.parent)return;const message=event.data;if(!message||message.jsonrpc!=="2.0")return;if(message.id!==undefined&&pending.has(message.id)){const item=pending.get(message.id);pending.delete(message.id);clearTimeout(item.timer);message.error?item.reject(message.error):item.resolve(message.result);return}if(message.method==="ui/notifications/tool-result")render(message.params?.structuredContent)},{passive:true});
+  function render(data){if(!data||typeof data!=="object")return;current=data;const d=data.diagnosis||{};workspace.textContent=`Текущая рабочая папка: ${data.workspacePath||d.workspacePath||"не определена"}`;diagnosisTitle.textContent=labels[d.status]||d.nextInstruction||"Требуется выбор проекта";diagnosisBadge.textContent=d.verified?"Готово":"Требуется действие";diagnosisBadge.className=d.verified?"badge ok":"badge";const missing=[...(d.missingDirectories||[]).map(x=>`Нет папки: ${x}`),...(d.missingFiles||[]).map(x=>`Нет файла: ${x}`),...(d.invalidFiles||[]).map(x=>`Проблема: ${x}`)];problems.replaceChildren(...missing.slice(0,8).map(text=>{const li=document.createElement("li");li.textContent=text;return li}));problems.classList.toggle("visible",missing.length>0);const repairable=["project_structure_incomplete","project_structure_invalid"].includes(d.status);repairChoice.hidden=!repairable;const invalid=d.status==="project_structure_invalid";repairDescription.textContent=invalid?"Сохранить копии повреждённых служебных файлов и восстановить их формат.":"Создать только отсутствующие элементы структуры.";repairHint.textContent=invalid?"Повреждённые служебные файлы будут сначала скопированы в .home-control/recovery, затем заменены чистыми файлами нужного формата. Проектные документы не изменяются.":"Будут созданы только отсутствующие папки и служебные файлы, перечисленные выше. Существующие файлы не перезаписываются.";newPath.value=data.prefill?.targetPath||data.workspacePath||"";existingPath.value=data.prefill?.targetPath||"";projectName.value=data.prefill?.projectName||"";if(d.verified){form.hidden=true;status.className="ok";status.textContent="Проект готов к работе."}}
+  render(window.openai?.toolOutput);
+  function updateDetails(){const action=form.elements.action.value;existingDetails.classList.toggle("visible",action==="select_existing");newDetails.classList.toggle("visible",action==="create_new");repairDetails.classList.toggle("visible",action==="repair_current");existingPath.required=action==="select_existing";newPath.required=action==="create_new";projectName.required=action==="create_new";button.textContent=action==="create_new"?"Создать проект":action==="repair_current"?"Восстановить структуру":action==="select_existing"?"Проверить проект":"Продолжить"}
+  form.addEventListener("change",updateDetails);
+  async function callSubmit(payload){try{return await rpc("tools/call",{name:"submit_project_setup",arguments:payload})}catch(error){if(window.openai?.callTool)return await window.openai.callTool("submit_project_setup",payload);throw error}}
+  async function sendToChat(prompt){try{await rpc("ui/message",{role:"user",content:[{type:"text",text:prompt}]},6000)}catch(error){if(window.openai?.sendFollowUpMessage){await window.openai.sendFollowUpMessage({prompt,scrollToBottom:true});return}throw error}}
+  form.addEventListener("submit",async event=>{event.preventDefault();updateDetails();if(!form.reportValidity())return;const action=form.elements.action.value;const targetPath=action==="select_existing"?existingPath.value.trim():action==="create_new"?newPath.value.trim():current.workspacePath;const payload={action,workspacePath:current.workspacePath||"",targetPath,projectName:action==="create_new"?projectName.value.trim():""};button.disabled=true;status.className="";status.textContent="Проверяю выбранный вариант…";try{const checked=await callSubmit(payload);if(checked?.isError||!checked?.structuredContent?.accepted)throw new Error(checked?.content?.[0]?.text||"Выбор не принят");const answer=checked.structuredContent;window.openai?.setWidgetState?.({modelContent:JSON.stringify(answer),privateContent:{projectSetupSelected:true}});const prompt=`Я выбрал действие в мастере проекта. Используй этот выбор как подтверждённый мной:\n${JSON.stringify({action:answer.actionLabel,projectName:answer.projectName,targetPath:answer.targetPath},null,2)}\n\nДиагностика выбранной папки:\n${JSON.stringify(answer.diagnosis,null,2)}\n\n${answer.nextInstruction}`;status.className=answer.gatePassed?"ok":"warn";status.textContent=answer.gatePassed?"Проект подтверждён. Передаю результат…":"Передаю выбранное действие…";await sendToChat(prompt);status.textContent=answer.gatePassed?"Проект подтверждён. Продолжаем в чате.":"Действие передано. Продолжаем в чате."}catch(error){status.className="error";status.textContent=`Не удалось продолжить: ${error?.message||error}`}finally{button.disabled=false}});
+</script>
+</body>
+</html>

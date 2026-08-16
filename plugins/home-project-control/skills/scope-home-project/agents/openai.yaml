@@ -1,0 +1,4 @@
+interface:
+  display_name: "Паспорт и состав работ"
+  short_description: "Определяет задачи, системы и границы проекта"
+  default_prompt: "Используй $scope-home-project, чтобы последовательно определить состав работ по дому."

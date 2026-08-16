@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "home-project-forms": {
+      "type": "stdio",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "./mcp/start-server.ps1"
+      ],
+      "tools": ["*"]
+    }
+  }
+}

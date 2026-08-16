@@ -1,0 +1,39 @@
+name: Validate plugin
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate JSON files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -File -Include *.json | ForEach-Object {
+            Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json | Out-Null
+          }
+
+      - name: Validate Python syntax
+        run: python -m compileall -q plugins/home-project-control/skills
+
+      - name: Validate JavaScript syntax
+        run: node --check plugins/home-project-control/mcp/server.mjs
+

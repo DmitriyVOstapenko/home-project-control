@@ -1,0 +1,20 @@
+{
+  "name": "home-project-control-marketplace",
+  "interface": {
+    "displayName": "Контроль дома"
+  },
+  "plugins": [
+    {
+      "name": "home-project-control",
+      "source": {
+        "source": "local",
+        "path": "./plugins/home-project-control"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Проверка объекта перед покупкой"
+  short_description: "Организует техническую проверку объекта до покупки"
+  default_prompt: "Используй $assess-property-before-purchase, чтобы подготовить проверку дома или квартиры до покупки."

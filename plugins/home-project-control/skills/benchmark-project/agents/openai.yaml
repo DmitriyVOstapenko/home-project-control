@@ -1,0 +1,4 @@
+interface:
+  display_name: "Сравнение проектов"
+  short_description: "Сопоставляет работы с подтверждёнными аналогами"
+  default_prompt: "Используй $benchmark-project, чтобы сравнить работы с подтверждёнными аналогами."

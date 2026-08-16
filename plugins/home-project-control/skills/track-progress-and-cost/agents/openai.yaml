@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ход работ и расходы"
+  short_description: "Сверяет прогресс, оплаты и подтверждающие документы"
+  default_prompt: "Используй $track-progress-and-cost, чтобы сверить ход работ, оплаты и подтверждающие документы."

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.validation-deps/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local project data and generated packages
+.home-control/
+projects/
+dist/
+*.zip
+*.log
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key

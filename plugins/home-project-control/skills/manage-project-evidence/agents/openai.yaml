@@ -1,0 +1,4 @@
+interface:
+  display_name: "Документы и факты"
+  short_description: "Ведёт локальный реестр документов и доказательств"
+  default_prompt: "Используй $manage-project-evidence, чтобы создать или обновить локальную базу документов проекта."

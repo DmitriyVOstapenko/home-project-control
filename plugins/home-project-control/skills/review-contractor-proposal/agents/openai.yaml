@@ -1,0 +1,4 @@
+interface:
+  display_name: "Проверка предложений"
+  short_description: "Проверяет сметы и предложения подрядчиков"
+  default_prompt: "Используй $review-contractor-proposal, чтобы проверить предложение подрядчика по документам проекта."
