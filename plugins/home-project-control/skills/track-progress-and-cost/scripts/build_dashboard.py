@@ -6,10 +6,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
+import uuid
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
+
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+MANAGE_SCRIPTS = PLUGIN_ROOT / "skills" / "manage-project-evidence" / "scripts"
+sys.path.insert(0, str(MANAGE_SCRIPTS))
+from inspect_project import require_ready_project  # noqa: E402
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -43,9 +51,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_dir", type=Path)
     args = parser.parse_args()
-    root = args.project_dir.expanduser().resolve()
-    if root == Path(root.anchor) or root == Path.home().resolve():
-        raise ValueError("Unsafe project directory")
+    root = require_ready_project(args.project_dir)
     control = root / ".home-control"
     required = [control / "documents.json", control / "costs.csv", control / "work_items.csv", control / "issues.csv"]
     missing = [str(path) for path in required if not path.is_file()]
@@ -147,7 +153,13 @@ def main() -> int:
     reports = control / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     output = reports / "project-status.md"
-    output.write_text("\n".join(lines), encoding="utf-8")
+    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text("\n".join(lines), encoding="utf-8")
+        temporary.replace(output)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     print(output)
     return 0
 

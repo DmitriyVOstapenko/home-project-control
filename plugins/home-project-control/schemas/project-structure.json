@@ -1,0 +1,88 @@
+{
+  "plugin_id": "home-project-control",
+  "structure_version": "3.0",
+  "supported_migrations": {
+    "1.0": {
+      "to": "3.0",
+      "mode": "additive",
+      "documents_schema_from": "1.0",
+      "documents_schema_to": "2.0"
+    },
+    "2.0": {
+      "to": "3.0",
+      "mode": "additive",
+      "documents_schema_from": "2.0",
+      "documents_schema_to": "2.0"
+    }
+  },
+  "folders": [
+    "00_Паспорт_проекта",
+    "01_Обмеры_и_исходные_данные",
+    "02_Проекты_и_технические_решения",
+    "03_Коммерческие_предложения",
+    "04_Сметы",
+    "05_Договоры",
+    "06_Закупки",
+    "07_Фото_и_ход_работ",
+    "08_Акты_и_приемка",
+    "09_Счета_чеки_и_платежи",
+    "10_Изменения_и_замечания",
+    "11_Гарантии_и_исполнительная_документация",
+    "12_Обследования_и_испытания",
+    "13_Эксплуатация_и_обслуживание",
+    "14_Локации_системы_и_оборудование",
+    "15_Сервис_ремонты_и_замены"
+  ],
+  "control_directories": [
+    ".home-control",
+    ".home-control/reports",
+    ".home-control/summaries",
+    ".home-control/site-cards",
+    ".home-control/asset-cards"
+  ],
+  "json_files": {
+    ".home-control/documents.json": {
+      "schema_version": "2.0",
+      "indexed_at_utc": null,
+      "items": []
+    }
+  },
+  "jsonl_files": {
+    ".home-control/facts.jsonl": {"entity": "Fact", "id_field": "fact_id", "append_only": true, "introduced_in": "1.0"},
+    ".home-control/decisions.jsonl": {"entity": "OwnerDecision", "id_field": "decision_id", "append_only": true, "introduced_in": "1.0"},
+    ".home-control/comparables.jsonl": {"entity": "Comparable", "id_field": "comparable_id", "append_only": true, "introduced_in": "1.0"},
+    ".home-control/reading_runs.jsonl": {"entity": "ReadingRun", "id_field": "reading_run_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/approved_requirements.jsonl": {"entity": "ApprovedRequirement", "id_field": "requirement_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/sites.jsonl": {"entity": "Site", "id_field": "site_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/zones.jsonl": {"entity": "Zone", "id_field": "zone_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/physical_elements.jsonl": {"entity": "PhysicalElement", "id_field": "element_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/systems.jsonl": {"entity": "System", "id_field": "system_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/assets.jsonl": {"entity": "Asset", "id_field": "asset_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/asset_interfaces.jsonl": {"entity": "AssetInterface", "id_field": "interface_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/routes.jsonl": {"entity": "Route", "id_field": "route_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/asset_events.jsonl": {"entity": "AssetEvent", "id_field": "event_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/maintenance_plans.jsonl": {"entity": "MaintenancePlan", "id_field": "maintenance_plan_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/condition_assessments.jsonl": {"entity": "ConditionAssessment", "id_field": "condition_assessment_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/work_requests.jsonl": {"entity": "WorkRequest", "id_field": "work_request_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/lifecycle_cost_assessments.jsonl": {"entity": "LifecycleCostAssessment", "id_field": "lifecycle_cost_assessment_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/lifecycle_decisions.jsonl": {"entity": "LifecycleDecision", "id_field": "lifecycle_decision_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/contractors.jsonl": {"entity": "Contractor", "id_field": "contractor_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/suppliers.jsonl": {"entity": "Supplier", "id_field": "supplier_id", "append_only": true, "introduced_in": "3.0"},
+    ".home-control/quotes.jsonl": {"entity": "Quote", "id_field": "quote_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/quote_items.jsonl": {"entity": "QuoteItem", "id_field": "quote_item_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/equipment_options.jsonl": {"entity": "EquipmentOption", "id_field": "equipment_option_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/price_observations.jsonl": {"entity": "PriceObservation", "id_field": "price_observation_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/norm_references.jsonl": {"entity": "NormReference", "id_field": "norm_reference_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/findings.jsonl": {"entity": "Finding", "id_field": "finding_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/alternatives.jsonl": {"entity": "Alternative", "id_field": "alternative_id", "append_only": true, "introduced_in": "2.0"}
+  },
+  "csv_files": {
+    ".home-control/costs.csv": ["cost_id", "date", "work_item_id", "category", "supplier", "description", "amount", "currency", "status", "evidence_document_id", "evidence_locator", "notes"],
+    ".home-control/work_items.csv": ["work_item_id", "system", "title", "contractor", "planned_start", "planned_finish", "status", "progress_percent", "planned_cost", "currency", "acceptance_document_id", "last_update", "notes"],
+    ".home-control/issues.csv": ["issue_id", "work_item_id", "severity", "status", "description", "owner", "due_date", "evidence_document_id", "notes"],
+    ".home-control/changes.csv": ["change_id", "date", "work_item_id", "initiator", "description", "reason", "amount_delta", "currency", "schedule_impact", "status", "decision_id", "evidence_document_id", "evidence_locator", "notes"],
+    ".home-control/commitments.csv": ["commitment_id", "party", "description", "due_date_or_event", "status", "source_document_id", "source_locator", "closure_document_id", "closure_locator", "notes"],
+    ".home-control/acceptance.csv": ["acceptance_id", "work_item_id", "date", "presented_scope", "status", "inspector", "evidence_document_id", "evidence_locator", "open_issue_ids", "notes"],
+    ".home-control/procurement.csv": ["procurement_id", "work_item_id", "item", "manufacturer", "model", "quantity", "unit", "required_by", "supplier", "status", "amount", "currency", "evidence_document_id", "notes"]
+  }
+}
