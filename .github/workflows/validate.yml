@@ -19,11 +19,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
       - name: Validate JSON files
         shell: pwsh
         run: |
@@ -34,6 +29,6 @@ jobs:
       - name: Validate Python syntax
         run: python -m compileall -q plugins/home-project-control/skills
 
-      - name: Validate JavaScript syntax
-        run: node --check plugins/home-project-control/mcp/server.mjs
+      - name: Test project utilities
+        run: python -m unittest discover -s tests -v
 
