@@ -16,6 +16,7 @@ INIT = SCRIPT_ROOT / "init_project.py"
 INSPECT = SCRIPT_ROOT / "inspect_project.py"
 REPAIR = SCRIPT_ROOT / "repair_project.py"
 INDEX = SCRIPT_ROOT / "index_documents.py"
+INGEST = SCRIPT_ROOT / "ingest_documents.py"
 AUDIT = SCRIPT_ROOT / "audit_project.py"
 DASHBOARD = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "track-progress-and-cost" / "scripts" / "build_dashboard.py"
 STRUCTURE = json.loads(
@@ -324,6 +325,19 @@ class ProjectToolsTest(unittest.TestCase):
                 (INIT, (project, "--dry-run")),
                 (REPAIR, (project, "--apply")),
                 (INDEX, (project, "--dry-run")),
+                (
+                    INGEST,
+                    (
+                        project,
+                        "--source",
+                        project / "source.pdf",
+                        "--target-folder",
+                        "02_Проекты_и_технические_решения",
+                        "--description",
+                        "Проект",
+                        "--apply",
+                    ),
+                ),
             ):
                 with self.subTest(script=script.name):
                     self.assertNotEqual(run_script(script, *arguments).returncode, 0)
@@ -387,6 +401,19 @@ class ProjectToolsTest(unittest.TestCase):
             for script, arguments in (
                 (INIT, (project, "--dry-run")),
                 (INDEX, (project, "--dry-run")),
+                (
+                    INGEST,
+                    (
+                        project,
+                        "--source",
+                        project / "source.pdf",
+                        "--target-folder",
+                        "02_Проекты_и_технические_решения",
+                        "--description",
+                        "Проект",
+                        "--apply",
+                    ),
+                ),
                 (AUDIT, (project,)),
                 (DASHBOARD, (project,)),
             ):
@@ -436,6 +463,138 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn("Duplicate document_id", refused.stderr)
             self.assertEqual(registry.read_bytes(), before)
+
+    def test_ingest_previews_then_copies_indexes_and_records_user_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            project = base / "project"
+            source = base / "Проект отопления.pdf"
+            source.write_bytes(b"approved heating project")
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            registry = project / ".home-control" / "documents.json"
+            registry_before = registry.read_bytes()
+            target_folder = "02_Проекты_и_технические_решения"
+            description = "Утверждённый владельцем проект отопления"
+
+            preview = run_script(
+                INGEST,
+                project,
+                "--source",
+                source,
+                "--target-folder",
+                target_folder,
+                "--description",
+                description,
+            )
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            preview_data = json.loads(preview.stdout)
+            self.assertEqual(preview_data["mode"], "preview")
+            self.assertEqual(preview_data["items"][0]["action"], "copy")
+            destination = project / target_folder / source.name
+            self.assertFalse(destination.exists())
+            self.assertEqual(registry.read_bytes(), registry_before)
+            self.assertEqual(source.read_bytes(), b"approved heating project")
+
+            applied = run_script(
+                INGEST,
+                project,
+                "--source",
+                source,
+                "--target-folder",
+                target_folder,
+                "--description",
+                description,
+                "--apply",
+            )
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(json.loads(applied.stdout)["mode"], "applied")
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            documents = json.loads(registry.read_text(encoding="utf-8"))
+            document = next(
+                item
+                for item in documents["items"]
+                if item["relative_path"] == f"{target_folder}/{source.name}"
+            )
+            self.assertEqual(document["status"], "active")
+            self.assertEqual(len(document["intake_contexts"]), 1)
+            self.assertEqual(document["intake_contexts"][0]["description"], description)
+            self.assertEqual(document["intake_contexts"][0]["declared_by"], "user")
+            self.assertEqual(document["intake_contexts"][0]["verification_status"], "unreviewed")
+
+            repeated = run_script(
+                INGEST,
+                project,
+                "--source",
+                source,
+                "--target-folder",
+                target_folder,
+                "--description",
+                description,
+                "--apply",
+            )
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual(json.loads(repeated.stdout)["items"][0]["action"], "use_existing_identical")
+            documents = json.loads(registry.read_text(encoding="utf-8"))
+            document = next(
+                item
+                for item in documents["items"]
+                if item["relative_path"] == f"{target_folder}/{source.name}"
+            )
+            self.assertEqual(len(document["intake_contexts"]), 1)
+
+    def test_ingest_blocks_name_collision_without_overwriting_either_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            project = base / "project"
+            source = base / "offer.pdf"
+            source.write_bytes(b"new offer")
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            destination = project / "03_Коммерческие_предложения" / source.name
+            destination.write_bytes(b"existing offer")
+            registry = project / ".home-control" / "documents.json"
+            registry_before = registry.read_bytes()
+
+            refused = run_script(
+                INGEST,
+                project,
+                "--source",
+                source,
+                "--target-folder",
+                "03_Коммерческие_предложения",
+                "--description",
+                "КП подрядчика",
+                "--apply",
+            )
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("different file", refused.stderr)
+            self.assertEqual(source.read_bytes(), b"new offer")
+            self.assertEqual(destination.read_bytes(), b"existing offer")
+            self.assertEqual(registry.read_bytes(), registry_before)
+
+    def test_ingest_does_not_silently_relocate_a_document_already_in_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            source = project / "document.pdf"
+            source.write_bytes(b"unsorted")
+
+            refused = run_script(
+                INGEST,
+                project,
+                "--source",
+                source,
+                "--target-folder",
+                "02_Проекты_и_технические_решения",
+                "--description",
+                "Проект",
+                "--apply",
+            )
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("already inside this project", refused.stderr)
+            self.assertTrue(source.is_file())
+            self.assertFalse(
+                (project / "02_Проекты_и_технические_решения" / source.name).exists()
+            )
 
     def test_invalid_nonempty_jsonl_blocks_migration_without_data_loss(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
