@@ -18,9 +18,18 @@ REPAIR = SCRIPT_ROOT / "repair_project.py"
 INDEX = SCRIPT_ROOT / "index_documents.py"
 INGEST = SCRIPT_ROOT / "ingest_documents.py"
 AUDIT = SCRIPT_ROOT / "audit_project.py"
+INVENTORY = SCRIPT_ROOT / "inventory_document.py"
+PROPOSAL_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "review-contractor-proposal" / "scripts"
+RECORD_PROPOSAL = PROPOSAL_SCRIPT_ROOT / "record_proposal_review.py"
+BUILD_DOSSIER = PROPOSAL_SCRIPT_ROOT / "build_proposal_dossier.py"
 DASHBOARD = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "track-progress-and-cost" / "scripts" / "build_dashboard.py"
 STRUCTURE = json.loads(
     (REPO_ROOT / "plugins" / "home-project-control" / "schemas" / "project-structure.json").read_text(
+        encoding="utf-8"
+    )
+)
+PROPOSAL_CONTRACT = json.loads(
+    (REPO_ROOT / "plugins" / "home-project-control" / "schemas" / "proposal-review-contract.json").read_text(
         encoding="utf-8"
     )
 )
@@ -128,6 +137,65 @@ def write_jsonl(path: Path, *records: dict) -> None:
     )
 
 
+def complete_proposal_contract(disciplines: list[str], source_ids: list[str], alternative_id: str) -> dict:
+    mandatory = [
+        {
+            "check_id": definition["check_id"],
+            "status": "completed",
+            "result": f"Проверено: {definition['title']}",
+            "source_ids": source_ids,
+        }
+        for definition in PROPOSAL_CONTRACT["universal_checks"]
+    ]
+    discipline_checks = [
+        {
+            "discipline": discipline,
+            "axis_id": axis["axis_id"],
+            "status": "completed",
+            "result": f"{discipline}: {axis['title']}",
+            "source_ids": source_ids,
+        }
+        for discipline in disciplines
+        for axis in PROPOSAL_CONTRACT["discipline_axes"]
+    ]
+    technical_alternatives = [
+        {
+            "track_id": track["track_id"],
+            "status": "completed",
+            "result": f"Исследован вариант: {track['title']}",
+            "source_ids": source_ids,
+            "alternative_ids": [alternative_id],
+            "solution": track["title"],
+            "project_fit": "Сопоставлен с требованиями тестового проекта",
+            "benefits": "Зафиксированы преимущества",
+            "drawbacks": "Зафиксированы ограничения",
+            "implementation_impacts": "Проверено влияние на монтаж и смежные системы",
+            "lifecycle_cost_notes": "Состав стоимости жизненного цикла обозначен",
+        }
+        for track in PROPOSAL_CONTRACT["technical_alternative_tracks"]
+    ]
+    additional = [{
+        "check_id": "MODEL-1",
+        "question": "Есть ли дополнительный риск, не покрытый обязательным контрактом?",
+        "status": "completed",
+        "result": "Дополнительных рисков в тестовом примере не выявлено",
+        "source_ids": source_ids,
+    }]
+    return {
+        "mandatory_checks": mandatory,
+        "discipline_checks": discipline_checks,
+        "technical_alternative_assessments": technical_alternatives,
+        "additional_model_checks": additional,
+        "completion_manifest": {
+            "contract_version": PROPOSAL_CONTRACT["contract_version"],
+            "mandatory_check_ids": [value["check_id"] for value in mandatory],
+            "discipline_check_keys": [f"{value['discipline']}|{value['axis_id']}" for value in discipline_checks],
+            "technical_alternative_track_ids": [value["track_id"] for value in technical_alternatives],
+            "additional_model_check_ids": [value["check_id"] for value in additional],
+        },
+    }
+
+
 class ProjectToolsTest(unittest.TestCase):
     def test_new_project_passes_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -150,6 +218,9 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue((project / ".home-control" / "sites.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "assets.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "asset_events.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "document_inventories.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "proposal_reviews.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "reports" / "proposals").is_dir())
 
     def test_audit_reports_duplicate_document_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -175,8 +246,8 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(audited.returncode, 1, audited.stderr)
             self.assertIn("duplicate document_id duplicate-document", audited.stdout)
 
-    def test_real_v1_and_v2_projects_migrate_without_losing_existing_data(self) -> None:
-        for version in ("1.0", "2.0"):
+    def test_real_v1_v2_and_v3_projects_migrate_without_losing_existing_data(self) -> None:
+        for version in ("1.0", "2.0", "3.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 create_legacy_project(project, version)
@@ -192,7 +263,8 @@ class ProjectToolsTest(unittest.TestCase):
                 self.assertEqual(preview.returncode, 0, preview.stderr)
                 self.assertEqual(file_snapshot(project), before)
                 self.assertIn("create_jsonl", preview.stdout)
-                self.assertIn("assets.jsonl", preview.stdout)
+                expected_added_registry = "assets.jsonl" if version in {"1.0", "2.0"} else "proposal_reviews.jsonl"
+                self.assertIn(expected_added_registry, preview.stdout)
                 self.assertIn("update_project_marker_version", preview.stdout)
                 if version == "1.0":
                     self.assertIn("migrate_json_schema_version", preview.stdout)
@@ -209,7 +281,7 @@ class ProjectToolsTest(unittest.TestCase):
                 after_documents = json.loads(
                     (project / ".home-control" / "documents.json").read_text(encoding="utf-8")
                 )
-                self.assertEqual(after_marker["created_by"]["structure_version"], "3.0")
+                self.assertEqual(after_marker["created_by"]["structure_version"], STRUCTURE["structure_version"])
                 self.assertEqual(after_marker["location"], original_marker["location"])
                 self.assertEqual(after_marker["systems"], original_marker["systems"])
                 self.assertEqual(after_documents["items"], original_documents["items"])
@@ -246,7 +318,7 @@ class ProjectToolsTest(unittest.TestCase):
         self.assertIn("inside the plugin distribution", refused.stderr)
 
     def test_unknown_older_and_newer_versions_are_blocked(self) -> None:
-        for version, expected in (("1.5", "No supported migration"), ("4.0", "Refusing to downgrade")):
+        for version, expected in (("1.5", "No supported migration"), ("5.0", "Refusing to downgrade")):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 self.assertEqual(run_script(INIT, project).returncode, 0)
@@ -1016,6 +1088,302 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(audited.returncode, 1, audited.stderr)
             self.assertIn("complete run has unresolved or inconsistent coverage", audited.stdout)
             self.assertNotIn("complete run has no existing summary file", audited.stdout)
+
+    def test_document_inventory_previews_applies_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            relative = Path("01_Обмеры_и_исходные_данные") / "source.txt"
+            (project / relative).write_text("первая\nвторая\nтретья\n", encoding="utf-8")
+            self.assertEqual(run_script(INDEX, project).returncode, 0)
+
+            preview = run_script(INVENTORY, project, relative.as_posix())
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertEqual(json.loads(preview.stdout)["inventory"]["expected_units"], [1, 2, 3])
+            registry = project / ".home-control" / "document_inventories.jsonl"
+            self.assertEqual(registry.read_text(encoding="utf-8"), "")
+
+            applied = run_script(INVENTORY, project, relative.as_posix(), "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertTrue(json.loads(applied.stdout)["appended"])
+            first_record = json.loads(registry.read_text(encoding="utf-8"))
+            repeated = run_script(INVENTORY, project, relative.as_posix(), "--apply")
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertFalse(json.loads(repeated.stdout)["appended"])
+            self.assertEqual(json.loads(registry.read_text(encoding="utf-8")), first_record)
+
+    def test_workbook_inventory_detects_hidden_content_and_formulas(self) -> None:
+        try:
+            from openpyxl import Workbook
+            from openpyxl.comments import Comment
+        except ImportError:
+            self.skipTest("openpyxl is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            relative = Path("02_Проекты_и_технические_решения") / "offer.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Смета"
+            sheet["A1"] = 2
+            sheet["B1"] = 100
+            sheet["C1"] = "=A1*B1"
+            sheet["A2"].comment = Comment("проверить", "тест")
+            sheet.row_dimensions[2].hidden = True
+            hidden = workbook.create_sheet("Скрытые данные")
+            hidden.sheet_state = "hidden"
+            hidden["A1"] = "условие"
+            workbook.save(project / relative)
+            self.assertEqual(run_script(INDEX, project).returncode, 0)
+
+            applied = run_script(INVENTORY, project, relative.as_posix(), "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            inventory = json.loads((project / ".home-control" / "document_inventories.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(inventory["expected_units"], ["Смета", "Скрытые данные"])
+            self.assertEqual(inventory["features"]["sheets"][0]["formula_count"], 1)
+            self.assertEqual(inventory["features"]["sheets"][0]["hidden_rows"], [2])
+            self.assertIn("inspect hidden sheet", "\n".join(inventory["reading_requirements"]))
+            document = json.loads((project / ".home-control" / "documents.json").read_text(encoding="utf-8"))["items"][0]
+            summary = project / ".home-control" / "summaries" / "offer-v1.md"
+            summary.write_text("# Конспект\n", encoding="utf-8")
+            reading_run = {
+                "reading_run_id": "RR-XLSX-1", "source_document_id": document["document_id"],
+                "document_version": 1, "sha256": document["sha256"], "status": "complete",
+                "coverage": {
+                    "expected_units": inventory["expected_units"], "checked_units": inventory["expected_units"],
+                    "checked_requirements": [], "gaps": [],
+                },
+                "summary_path": ".home-control/summaries/offer-v1.md",
+            }
+            write_jsonl(project / ".home-control" / "reading_runs.jsonl", reading_run)
+            audited = run_script(AUDIT, project)
+            self.assertEqual(audited.returncode, 1)
+            self.assertIn("visual or structural reading requirements are unchecked", audited.stdout)
+            reading_run["coverage"]["checked_requirements"] = inventory["reading_requirements"]
+            write_jsonl(project / ".home-control" / "reading_runs.jsonl", reading_run)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+    def test_complete_reading_run_must_match_current_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            relative = Path("01_Обмеры_и_исходные_данные") / "source.txt"
+            (project / relative).write_text("one\ntwo\n", encoding="utf-8")
+            self.assertEqual(run_script(INDEX, project).returncode, 0)
+            self.assertEqual(run_script(INVENTORY, project, relative.as_posix(), "--apply").returncode, 0)
+            documents = json.loads((project / ".home-control" / "documents.json").read_text(encoding="utf-8"))
+            document = documents["items"][0]
+            summary = project / ".home-control" / "summaries" / "source-v1.md"
+            summary.write_text("# Конспект\n", encoding="utf-8")
+            reading_run = {
+                "reading_run_id": "RR-MATCHED",
+                "source_document_id": document["document_id"],
+                "document_version": 1,
+                "sha256": document["sha256"],
+                "status": "complete",
+                "coverage": {"expected_units": [1, 2], "checked_units": [1, 2], "gaps": []},
+                "summary_path": ".home-control/summaries/source-v1.md",
+            }
+            write_jsonl(project / ".home-control" / "reading_runs.jsonl", reading_run)
+            audited = run_script(AUDIT, project)
+            self.assertEqual(audited.returncode, 0, audited.stdout + audited.stderr)
+
+            reading_run["coverage"] = {"expected_units": [1], "checked_units": [1], "gaps": []}
+            write_jsonl(project / ".home-control" / "reading_runs.jsonl", reading_run)
+            audited = run_script(AUDIT, project)
+            self.assertEqual(audited.returncode, 1, audited.stderr)
+            self.assertIn("expected_units do not match the document inventory", audited.stdout)
+
+    def test_generic_proposal_review_records_validates_and_builds_three_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            relative = Path("03_Коммерческие_предложения") / "mixed-offer.txt"
+            (project / relative).write_text("Светильники 2 шт по 1000 руб.\nМонтаж включён.\n", encoding="utf-8")
+            self.assertEqual(run_script(INDEX, project).returncode, 0)
+            self.assertEqual(run_script(INVENTORY, project, relative.as_posix(), "--apply").returncode, 0)
+            control = project / ".home-control"
+            document = json.loads((control / "documents.json").read_text(encoding="utf-8"))["items"][0]
+            inventory = json.loads((control / "document_inventories.jsonl").read_text(encoding="utf-8"))
+            summary = control / "summaries" / "mixed-offer-v1.md"
+            summary.write_text("# Полный конспект КП\n", encoding="utf-8")
+            fact = {
+                "fact_id": "F-REQ-1",
+                "statement": "Требуются два светильника с монтажом",
+                "statement_kind": "source_fact",
+                "evidence_origin": "approved_project_document",
+                "verification_status": "verified",
+                "source_document_id": document["document_id"],
+                "document_version": 1,
+                "locator": "подтверждённое требование теста",
+            }
+            requirement = {
+                "requirement_id": "AR-1",
+                "statement": "Поставить и смонтировать два светильника",
+                "scope": "тестовая зона",
+                "baseline_status": "approved",
+                "mandatory_parameters": {"quantity": 2},
+                "source_fact_ids": ["F-REQ-1"],
+                "verification_status": "verified",
+            }
+            write_jsonl(control / "facts.jsonl", fact)
+            write_jsonl(control / "approved_requirements.jsonl", requirement)
+            package = {
+                "schema_version": "1.0",
+                "reading_runs": [{
+                    "reading_run_id": "RR-OFFER-1",
+                    "source_document_id": document["document_id"],
+                    "document_version": 1,
+                    "sha256": document["sha256"],
+                    "status": "complete",
+                    "coverage": {"expected_units": [1, 2], "checked_units": [1, 2], "gaps": []},
+                    "summary_path": ".home-control/summaries/mixed-offer-v1.md",
+                }],
+                "contractors": [{"contractor_id": "CTR-1", "name": "Тестовый кандидат"}],
+                "quotes": [{
+                    "quote_id": "Q-1", "contractor_id": "CTR-1",
+                    "source_document_id": document["document_id"], "document_version": 1,
+                    "sha256": document["sha256"], "currency": "RUB", "status": "under_review",
+                }],
+                "quote_items": [{
+                    "quote_item_id": "QI-1", "quote_id": "Q-1",
+                    "raw_text": "Светильники 2 шт по 1000 руб., монтаж включён", "locator": "строки 1-2",
+                    "quantity": 2, "unit": "шт", "unit_price": 1000, "amount": 2000,
+                    "approved_requirement_ids": ["AR-1"], "target_entity_ids": [],
+                    "proposal_match_status": "exact", "verifiability": "verifiable",
+                }],
+                "findings": [{
+                    "finding_id": "FN-1", "statement": "Арифметика строки подтверждена",
+                    "finding_type": "strength", "severity": "positive", "source_ids": ["QI-1"],
+                }],
+                "alternatives": [{
+                    "alternative_id": "ALT-1", "description": "Запросить сопоставимое предложение второго подрядчика",
+                    "baseline_requirement_ids": ["AR-1"], "checked_at": "2026-08-19",
+                    "source_urls": ["https://example.test/alternative"],
+                }],
+                "proposal_reviews": [{
+                    "proposal_review_id": "PR-1", "source_document_id": document["document_id"],
+                    "document_version": 1, "sha256": document["sha256"], "quote_id": "Q-1",
+                    "status": "ready_for_owner", "disciplines": ["electrical", "equipment_supply"],
+                    "inventory_id": inventory["inventory_id"], "reading_run_ids": ["RR-OFFER-1"],
+                    "baseline_requirement_ids": ["AR-1"],
+                    "requirement_matches": [{"requirement_id": "AR-1", "status": "exact", "quote_item_ids": ["QI-1"]}],
+                    "unmatched_quote_item_ids": [],
+                    "technical_checks": [{
+                        "check_id": "TC-1", "category": "scope", "criterion": "Поставка и монтаж включены",
+                        "status": "satisfied", "source_ids": ["QI-1", "AR-1"],
+                    }],
+                    "calculations": [{
+                        "calculation_id": "CALC-1", "formula": "quantity * unit_price",
+                        "inputs": [
+                            {"name": "quantity", "value": 2, "unit": "шт", "source_ids": ["QI-1"]},
+                            {"name": "unit_price", "value": 1000, "unit": "RUB/шт", "source_ids": ["QI-1"]},
+                        ],
+                        "result": 2000, "unit": "RUB", "status": "verified",
+                    }],
+                    "search_runs": [{
+                        "search_run_id": "SR-1", "status": "complete",
+                        "queries": ["монтаж двух светильников подрядчик тестовый регион"],
+                        "checked_at": "2026-08-19", "region": "тестовый регион",
+                        "source_urls": ["https://example.test/contractor"],
+                        "candidate_contractor_ids": ["CTR-1"],
+                        "privacy_review": {"unnecessary_private_data_removed": True},
+                    }],
+                    "finding_ids": ["FN-1"], "alternative_ids": ["ALT-1"], "essential_blockers": [],
+                    "contractor_questions": ["Подтвердите срок гарантии"],
+                    **complete_proposal_contract(
+                        ["electrical", "equipment_supply"], ["QI-1", "AR-1"], "ALT-1"
+                    ),
+                }],
+            }
+            package_path = project / "proposal-package.json"
+            package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            invalid_existing_run = json.loads(json.dumps(package["reading_runs"][0]))
+            invalid_existing_run["coverage"]["checked_units"] = [1]
+            write_jsonl(control / "reading_runs.jsonl", invalid_existing_run)
+            references_bad_run = json.loads(json.dumps(package))
+            references_bad_run["reading_runs"] = []
+            bad_run_path = project / "bad-run-package.json"
+            bad_run_path.write_text(json.dumps(references_bad_run, ensure_ascii=False), encoding="utf-8")
+            rejected_bad_run = run_script(RECORD_PROPOSAL, project, bad_run_path)
+            self.assertEqual(rejected_bad_run.returncode, 2)
+            self.assertIn("coverage or blockers", rejected_bad_run.stderr)
+            write_jsonl(control / "reading_runs.jsonl")
+
+            invalid = json.loads(json.dumps(package))
+            invalid["proposal_reviews"][0]["requirement_matches"] = []
+            invalid_path = project / "invalid-package.json"
+            invalid_path.write_text(json.dumps(invalid, ensure_ascii=False), encoding="utf-8")
+            rejected = run_script(RECORD_PROPOSAL, project, invalid_path)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertEqual((control / "proposal_reviews.jsonl").read_text(encoding="utf-8"), "")
+
+            missing_alternative = json.loads(json.dumps(package))
+            missing_alternative["proposal_reviews"][0]["technical_alternative_assessments"] = [
+                value
+                for value in missing_alternative["proposal_reviews"][0]["technical_alternative_assessments"]
+                if value["track_id"] != "different_technical_principle"
+            ]
+            missing_alternative_path = project / "missing-technical-alternative.json"
+            missing_alternative_path.write_text(
+                json.dumps(missing_alternative, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_alternative = run_script(RECORD_PROPOSAL, project, missing_alternative_path)
+            self.assertEqual(rejected_alternative.returncode, 2)
+            self.assertIn("technical_alternative_assessments", rejected_alternative.stderr)
+
+            specialist_required = json.loads(json.dumps(package))
+            specialist_required["proposal_reviews"][0]["mandatory_checks"][0].update({
+                "status": "requires_specialist",
+                "result": "Полнота чтения требует проверки вложенного чертежа специалистом",
+                "rationale": "Не подтверждена читаемость условных обозначений на одном листе",
+            })
+            specialist_path = project / "specialist-required-package.json"
+            specialist_path.write_text(
+                json.dumps(specialist_required, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_specialist = run_script(RECORD_PROPOSAL, project, specialist_path)
+            self.assertEqual(rejected_specialist.returncode, 2)
+            self.assertIn("blocked or specialist-required", rejected_specialist.stderr)
+
+            invalid_manifest = json.loads(json.dumps(package))
+            invalid_manifest["proposal_reviews"][0]["completion_manifest"]["mandatory_check_ids"][0] = 1
+            invalid_manifest_path = project / "invalid-manifest-package.json"
+            invalid_manifest_path.write_text(
+                json.dumps(invalid_manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_manifest = run_script(RECORD_PROPOSAL, project, invalid_manifest_path)
+            self.assertEqual(rejected_manifest.returncode, 2)
+            self.assertIn("completion_manifest.mandatory_check_ids", rejected_manifest.stderr)
+
+            preview = run_script(RECORD_PROPOSAL, project, package_path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertEqual(json.loads(preview.stdout)["append"]["proposal_reviews"], 1)
+            applied = run_script(RECORD_PROPOSAL, project, package_path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            dossier_preview = run_script(BUILD_DOSSIER, project, "PR-1")
+            self.assertEqual(dossier_preview.returncode, 0, dossier_preview.stderr)
+            target = control / "reports" / "proposals" / "PR-1"
+            self.assertFalse(target.exists())
+            created = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
+            self.assertEqual(created.returncode, 0, created.stderr)
+            self.assertEqual(
+                {path.name for path in target.iterdir()},
+                {"owner-card.md", "contractor-request.md", "full-dossier.md"},
+            )
+            dossier_text = (target / "full-dossier.md").read_text(encoding="utf-8")
+            self.assertIn("electrical, equipment_supply", dossier_text)
+            self.assertIn("## Альтернативные технические решения", dossier_text)
+            self.assertIn("different_technical_principle", dossier_text)
+            self.assertIn("## Дополнительный анализ модели", dossier_text)
+            refused = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
+            self.assertEqual(refused.returncode, 2)
+            escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")
+            self.assertEqual(escaped.returncode, 2)
+            self.assertFalse((control / "reports" / "escape").exists())
 
 
 if __name__ == "__main__":

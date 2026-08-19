@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "home-project-control"
 STRUCTURE_FILE = PLUGIN_ROOT / "schemas" / "project-structure.json"
 ONTOLOGY_FILE = PLUGIN_ROOT / "schemas" / "ontology.json"
+PROPOSAL_CONTRACT_FILE = PLUGIN_ROOT / "schemas" / "proposal-review-contract.json"
 SKILLS_ROOT = PLUGIN_ROOT / "skills"
 
 
@@ -22,6 +23,7 @@ class SchemaConsistencyTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.structure = json.loads(STRUCTURE_FILE.read_text(encoding="utf-8"))
         cls.ontology = json.loads(ONTOLOGY_FILE.read_text(encoding="utf-8"))
+        cls.proposal_contract = json.loads(PROPOSAL_CONTRACT_FILE.read_text(encoding="utf-8"))
 
     def test_jsonl_registry_metadata_matches_ontology(self) -> None:
         registries = self.structure["jsonl_files"]
@@ -70,6 +72,23 @@ class SchemaConsistencyTests(unittest.TestCase):
                 match = re.search(r"(?m)^name:\s*([^\r\n]+)$", text)
                 self.assertIsNotNone(match)
                 self.assertEqual(match.group(1).strip(), skill_dir.name)
+
+    def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
+        contract = self.proposal_contract
+        self.assertEqual(
+            set(contract["check_statuses"]),
+            set(self.ontology["dimensions"]["mandatory_check_status"]),
+        )
+        self.assertTrue(set(contract["ready_statuses"]).issubset(set(contract["check_statuses"])))
+        for section, field in (
+            ("universal_checks", "check_id"),
+            ("discipline_axes", "axis_id"),
+            ("technical_alternative_tracks", "track_id"),
+        ):
+            identifiers = [value[field] for value in contract[section]]
+            with self.subTest(section=section):
+                self.assertTrue(identifiers)
+                self.assertEqual(len(identifiers), len(set(identifiers)))
 
 
 if __name__ == "__main__":

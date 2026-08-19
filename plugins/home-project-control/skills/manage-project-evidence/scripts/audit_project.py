@@ -9,13 +9,16 @@ import json
 import uuid
 from pathlib import Path
 
-from inspect_project import require_ready_project
+from inspect_project import is_linklike, require_ready_project
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 ONTOLOGY = json.loads((PLUGIN_ROOT / "schemas" / "ontology.json").read_text(encoding="utf-8"))
 DIMENSIONS = {name: set(values) for name, values in ONTOLOGY["dimensions"].items()}
 STRUCTURE = json.loads((PLUGIN_ROOT / "schemas" / "project-structure.json").read_text(encoding="utf-8"))
+PROPOSAL_CONTRACT = json.loads(
+    (PLUGIN_ROOT / "schemas" / "proposal-review-contract.json").read_text(encoding="utf-8")
+)
 
 
 CSV_IDS = {
@@ -212,6 +215,354 @@ def records_by_id(records: list[tuple[int, dict]], id_field: str) -> dict[str, d
     return result
 
 
+def validate_review_contract(
+    review: dict,
+    registered_ids: set[str],
+    known_alternatives: set[str],
+) -> list[str]:
+    """Return machine-checkable contract errors for one ProposalReview."""
+    errors: list[str] = []
+    statuses = set(PROPOSAL_CONTRACT["check_statuses"])
+    ready_statuses = set(PROPOSAL_CONTRACT["ready_statuses"])
+    expected_mandatory = [value["check_id"] for value in PROPOSAL_CONTRACT["universal_checks"]]
+    expected_axes = [value["axis_id"] for value in PROPOSAL_CONTRACT["discipline_axes"]]
+    expected_tracks = [value["track_id"] for value in PROPOSAL_CONTRACT["technical_alternative_tracks"]]
+    disciplines = review.get("disciplines") if isinstance(review.get("disciplines"), list) else []
+
+    def objects(field: str) -> list[dict]:
+        value = review.get(field)
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            errors.append(f"{field} must be an array of objects")
+            return []
+        return value
+
+    def validate_item(item: dict, label: str, require_sources: bool = True) -> str:
+        status = str(item.get("status", "")).strip()
+        if status not in statuses:
+            errors.append(f"{label} has an unknown status")
+        result = str(item.get("result", "")).strip()
+        rationale = str(item.get("rationale", "")).strip()
+        if not result:
+            errors.append(f"{label} has no result")
+        if status in {"not_applicable", "blocked", "requires_specialist"} and not rationale:
+            errors.append(f"{label} requires a rationale")
+        sources = item.get("source_ids", [])
+        if not isinstance(sources, list) or any(not isinstance(value, str) or not value.strip() for value in sources):
+            errors.append(f"{label} source_ids must be a string array")
+            sources = []
+        if require_sources and status == "completed" and not sources:
+            errors.append(f"{label} completed without sources")
+        if any(value not in registered_ids for value in sources):
+            errors.append(f"{label} refers to an unknown source")
+        return status
+
+    mandatory = objects("mandatory_checks")
+    mandatory_ids: list[str] = []
+    required_statuses: list[str] = []
+    for item in mandatory:
+        identifier = str(item.get("check_id", "")).strip()
+        mandatory_ids.append(identifier)
+        required_statuses.append(validate_item(item, f"mandatory check {identifier or 'without ID'}"))
+    if sorted(mandatory_ids) != sorted(expected_mandatory) or len(mandatory_ids) != len(set(mandatory_ids)):
+        errors.append("mandatory_checks do not cover the current universal contract exactly once")
+
+    discipline_checks = objects("discipline_checks")
+    discipline_keys: list[str] = []
+    for item in discipline_checks:
+        discipline = str(item.get("discipline", "")).strip()
+        axis = str(item.get("axis_id", "")).strip()
+        key = f"{discipline}|{axis}"
+        discipline_keys.append(key)
+        if discipline not in disciplines or axis not in expected_axes:
+            errors.append(f"discipline check {key} is outside the declared contract")
+        required_statuses.append(validate_item(item, f"discipline check {key}"))
+    expected_discipline_keys = [f"{discipline}|{axis}" for discipline in disciplines for axis in expected_axes]
+    if sorted(discipline_keys) != sorted(expected_discipline_keys) or len(discipline_keys) != len(set(discipline_keys)):
+        errors.append("discipline_checks do not cover every required axis for every discipline exactly once")
+
+    alternatives = objects("technical_alternative_assessments")
+    track_ids: list[str] = []
+    for item in alternatives:
+        track_id = str(item.get("track_id", "")).strip()
+        track_ids.append(track_id)
+        status = validate_item(item, f"technical alternative {track_id or 'without ID'}")
+        required_statuses.append(status)
+        linked = item.get("alternative_ids", [])
+        if not isinstance(linked, list) or any(not isinstance(value, str) or not value.strip() for value in linked):
+            errors.append(f"technical alternative {track_id} alternative_ids must be a string array")
+            linked = []
+        if any(value not in known_alternatives for value in linked):
+            errors.append(f"technical alternative {track_id} refers to an unknown Alternative")
+        if status == "completed":
+            for field in ("solution", "project_fit", "benefits", "drawbacks", "implementation_impacts", "lifecycle_cost_notes"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"technical alternative {track_id} lacks {field}")
+    if sorted(track_ids) != sorted(expected_tracks) or len(track_ids) != len(set(track_ids)):
+        errors.append("technical_alternative_assessments do not cover every required track exactly once")
+
+    additional = objects("additional_model_checks")
+    additional_ids: list[str] = []
+    for item in additional:
+        identifier = str(item.get("check_id", "")).strip()
+        additional_ids.append(identifier)
+        if not identifier or not str(item.get("question", "")).strip():
+            errors.append("additional model check requires check_id and question")
+        validate_item(item, f"additional model check {identifier or 'without ID'}", require_sources=False)
+    if len(additional_ids) != len(set(additional_ids)):
+        errors.append("additional_model_checks contain duplicate check_id values")
+
+    manifest = review.get("completion_manifest")
+    if not isinstance(manifest, dict):
+        errors.append("completion_manifest must be an object")
+    else:
+        if manifest.get("contract_version") != PROPOSAL_CONTRACT["contract_version"]:
+            errors.append("completion_manifest has an unknown contract_version")
+        for field, expected in (
+            ("mandatory_check_ids", mandatory_ids),
+            ("discipline_check_keys", discipline_keys),
+            ("technical_alternative_track_ids", track_ids),
+            ("additional_model_check_ids", additional_ids),
+        ):
+            value = manifest.get(field)
+            if (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) or not item.strip() for item in value)
+                or sorted(value) != sorted(expected)
+                or len(value) != len(set(value))
+            ):
+                errors.append(f"completion_manifest.{field} does not match the recorded checks")
+
+    if review.get("status") == "ready_for_owner" and any(status not in ready_statuses for status in required_statuses):
+        errors.append("ready review has blocked or specialist-required contract items")
+    return errors
+
+
+def normalized_unit_set(value: object) -> set[str] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    normalized: list[str] = []
+    for unit in value:
+        if isinstance(unit, bool) or not isinstance(unit, (int, str)):
+            return None
+        if isinstance(unit, str) and not unit.strip():
+            return None
+        normalized.append(json.dumps(unit, ensure_ascii=False, sort_keys=True))
+    if len(normalized) != len(set(normalized)):
+        return None
+    return set(normalized)
+
+
+def validate_proposal_reviews(
+    root: Path,
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    active_documents: set[str],
+    current_versions: dict[str, tuple[object, str]],
+    warnings: list[str],
+) -> None:
+    inventories = records_by_id(jsonl_records["document_inventories.jsonl"], "inventory_id")
+    reading_runs = records_by_id(jsonl_records["reading_runs.jsonl"], "reading_run_id")
+    quotes = records_by_id(jsonl_records["quotes.jsonl"], "quote_id")
+    quote_items = records_by_id(jsonl_records["quote_items.jsonl"], "quote_item_id")
+    registered_ids = set(active_documents)
+    for values in jsonl_ids.values():
+        registered_ids.update(values)
+
+    for line_number, review in jsonl_records["proposal_reviews.jsonl"]:
+        location = f"proposal_reviews.jsonl:{line_number}"
+        status = review.get("status")
+        if status not in DIMENSIONS["proposal_review_status"]:
+            warnings.append(f"{location}: unknown proposal review status")
+        source_id = str(review.get("source_document_id", "")).strip()
+        version_key = (review.get("document_version"), str(review.get("sha256", "")).strip())
+        if source_id not in active_documents:
+            warnings.append(f"{location}: source document is not active")
+        elif current_versions.get(source_id) != version_key:
+            warnings.append(f"{location}: source version is not current")
+        disciplines = review.get("disciplines")
+        if not isinstance(disciplines, list) or not disciplines or any(
+            not isinstance(value, str) or not value.strip() for value in disciplines
+        ):
+            warnings.append(f"{location}: disciplines must be a non-empty string array")
+
+        quote_id = str(review.get("quote_id", "")).strip()
+        quote = quotes.get(quote_id)
+        if (
+            quote is None
+            or quote.get("source_document_id") != source_id
+            or (quote.get("document_version"), str(quote.get("sha256", "")).strip()) != version_key
+        ):
+            warnings.append(f"{location}: quote is missing or belongs to another source version")
+        inventory_id = str(review.get("inventory_id", "")).strip()
+        inventory = inventories.get(inventory_id)
+        if (
+            inventory is None
+            or inventory.get("source_document_id") != source_id
+            or (inventory.get("document_version"), str(inventory.get("sha256", "")).strip()) != version_key
+        ):
+            warnings.append(f"{location}: inventory is missing or does not match the source version")
+
+        run_ids = id_list(review, "reading_run_ids", location, warnings)
+        complete_run = False
+        for run_id in run_ids:
+            run = reading_runs.get(run_id)
+            if run is None:
+                warnings.append(f"{location}: unknown reading_run_id {run_id}")
+            elif inventory is not None:
+                coverage = run.get("coverage")
+                expected = normalized_unit_set(coverage.get("expected_units")) if isinstance(coverage, dict) else None
+                checked = normalized_unit_set(coverage.get("checked_units")) if isinstance(coverage, dict) else None
+                inventoried = normalized_unit_set(inventory.get("expected_units"))
+                requirements = inventory.get("reading_requirements", [])
+                checked_requirements = coverage.get("checked_requirements", []) if isinstance(coverage, dict) else None
+                summary_path = str(run.get("summary_path", "")).strip()
+                summary = root / summary_path if summary_path else None
+                summaries_root = (root / ".home-control" / "summaries").resolve()
+                try:
+                    summary_resolved = summary.resolve() if summary else None
+                    summary_valid = bool(
+                        summary_resolved
+                        and summaries_root in summary_resolved.parents
+                        and summary_resolved.is_file()
+                        and summary is not None
+                        and not is_linklike(summary)
+                    )
+                except (OSError, RuntimeError):
+                    summary_valid = False
+                if (
+                    run.get("source_document_id") == source_id
+                    and (run.get("document_version"), str(run.get("sha256", "")).strip()) == version_key
+                    and run.get("status") == "complete"
+                    and inventory.get("status") == "complete"
+                    and expected is not None
+                    and expected == checked == inventoried
+                    and isinstance(coverage, dict)
+                    and coverage.get("gaps") == []
+                    and isinstance(requirements, list)
+                    and isinstance(checked_requirements, list)
+                    and all(isinstance(value, str) and value.strip() for value in requirements)
+                    and all(isinstance(value, str) and value.strip() for value in checked_requirements)
+                    and len(checked_requirements) == len(set(checked_requirements))
+                    and set(checked_requirements) == set(requirements)
+                    and summary_valid
+                ):
+                    complete_run = True
+
+        baseline_ids = id_list(review, "baseline_requirement_ids", location, warnings)
+        if any(value not in jsonl_ids["approved_requirements.jsonl"] for value in baseline_ids):
+            warnings.append(f"{location}: unknown baseline requirement")
+        matches = review.get("requirement_matches")
+        matched_requirements: list[str] = []
+        covered_items: set[str] = set()
+        current_quote_items = {
+            item_id for item_id, item in quote_items.items() if item.get("quote_id") == quote_id
+        }
+        if not isinstance(matches, list) or any(not isinstance(value, dict) for value in matches):
+            warnings.append(f"{location}: requirement_matches must be an array of objects")
+            matches = []
+        for match_number, match in enumerate(matches, 1):
+            requirement_id = str(match.get("requirement_id", "")).strip()
+            matched_requirements.append(requirement_id)
+            if requirement_id not in jsonl_ids["approved_requirements.jsonl"]:
+                warnings.append(f"{location}: match {match_number} has an unknown requirement")
+            if match.get("status") not in DIMENSIONS["proposal_match_status"]:
+                warnings.append(f"{location}: match {match_number} has an unknown status")
+            linked = id_list(match, "quote_item_ids", f"{location}:match {match_number}", warnings)
+            if any(value not in current_quote_items for value in linked):
+                warnings.append(f"{location}: match {match_number} links an item from another quote")
+            covered_items.update(linked)
+        if sorted(matched_requirements) != sorted(baseline_ids) or len(matched_requirements) != len(set(matched_requirements)):
+            warnings.append(f"{location}: every baseline requirement must be covered exactly once")
+        unmatched = set(id_list(review, "unmatched_quote_item_ids", location, warnings))
+        if unmatched & covered_items or unmatched | covered_items != current_quote_items:
+            warnings.append(f"{location}: every quote item must be classified exactly once")
+
+        checks = review.get("technical_checks")
+        if not isinstance(checks, list) or not checks or any(not isinstance(value, dict) for value in checks):
+            warnings.append(f"{location}: technical_checks must be a non-empty array of objects")
+            checks = []
+        seen_checks: set[str] = set()
+        for check in checks:
+            check_id = str(check.get("check_id", "")).strip()
+            if not check_id or check_id in seen_checks:
+                warnings.append(f"{location}: missing or duplicate technical check ID")
+            seen_checks.add(check_id)
+            if not str(check.get("category", "")).strip() or not str(check.get("criterion", "")).strip():
+                warnings.append(f"{location}: technical check requires category and criterion")
+            if check.get("status") not in DIMENSIONS["technical_check_status"]:
+                warnings.append(f"{location}: technical check has unknown status")
+            sources = id_list(check, "source_ids", f"{location}:check {check_id}", warnings)
+            if any(value not in registered_ids for value in sources):
+                warnings.append(f"{location}: technical check has an unknown source")
+
+        calculations = review.get("calculations", [])
+        if not isinstance(calculations, list) or any(not isinstance(value, dict) for value in calculations):
+            warnings.append(f"{location}: calculations must be an array of objects")
+            calculations = []
+        for calculation in calculations:
+            calc_id = str(calculation.get("calculation_id", "")).strip()
+            if not calc_id or not str(calculation.get("formula", "")).strip():
+                warnings.append(f"{location}: calculation requires an ID and formula")
+            if calculation.get("status") not in DIMENSIONS["calculation_status"]:
+                warnings.append(f"{location}: calculation {calc_id or 'without ID'} has unknown status")
+            inputs = calculation.get("inputs")
+            if not isinstance(inputs, list) or any(not isinstance(value, dict) for value in inputs):
+                warnings.append(f"{location}: calculation {calc_id or 'without ID'} has invalid inputs")
+                continue
+            for value in inputs:
+                if not str(value.get("name", "")).strip() or "value" not in value or not str(value.get("unit", "")).strip():
+                    warnings.append(f"{location}: calculation {calc_id} has an incomplete input")
+                sources = id_list(value, "source_ids", f"{location}:calculation {calc_id}", warnings)
+                if any(item not in registered_ids for item in sources):
+                    warnings.append(f"{location}: calculation {calc_id} has an unknown source")
+
+        searches = review.get("search_runs")
+        if not isinstance(searches, list) or any(not isinstance(value, dict) for value in searches):
+            warnings.append(f"{location}: search_runs must be an array of objects")
+            searches = []
+        for search in searches:
+            search_id = str(search.get("search_run_id", "")).strip()
+            if not search_id or search.get("status") not in DIMENSIONS["search_run_status"]:
+                warnings.append(f"{location}: invalid external search run")
+            queries = search.get("queries")
+            if not isinstance(queries, list) or not queries or any(not isinstance(value, str) or not value.strip() for value in queries):
+                warnings.append(f"{location}: search {search_id or 'without ID'} has no reproducible queries")
+            urls = search.get("source_urls")
+            if not isinstance(urls, list) or any(not isinstance(value, str) or not value.strip() for value in urls):
+                warnings.append(f"{location}: search {search_id or 'without ID'} has invalid source URLs")
+            if not str(search.get("checked_at", "")).strip() or not str(search.get("region", "")).strip():
+                warnings.append(f"{location}: search {search_id or 'without ID'} lacks date or region")
+            privacy = search.get("privacy_review")
+            if not isinstance(privacy, dict) or privacy.get("unnecessary_private_data_removed") is not True:
+                warnings.append(f"{location}: search {search_id or 'without ID'} lacks privacy confirmation")
+            candidates = id_list(search, "candidate_contractor_ids", f"{location}:search {search_id}", warnings)
+            if any(value not in jsonl_ids["contractors.jsonl"] for value in candidates):
+                warnings.append(f"{location}: search has an unknown contractor candidate")
+
+        findings = id_list(review, "finding_ids", location, warnings)
+        if any(value not in jsonl_ids["findings.jsonl"] for value in findings):
+            warnings.append(f"{location}: unknown finding link")
+        alternatives = id_list(review, "alternative_ids", location, warnings)
+        if any(value not in jsonl_ids["alternatives.jsonl"] for value in alternatives):
+            warnings.append(f"{location}: unknown alternative link")
+        for error in validate_review_contract(review, registered_ids, jsonl_ids["alternatives.jsonl"]):
+            warnings.append(f"{location}: {error}")
+        blockers = id_list(review, "essential_blockers", location, warnings)
+        id_list(review, "contractor_questions", location, warnings)
+        if status == "ready_for_owner":
+            if (
+                inventory is None
+                or inventory.get("status") != "complete"
+                or not complete_run
+                or blockers
+                or not baseline_ids
+                or not current_quote_items
+            ):
+                warnings.append(f"{location}: ready review still has incomplete coverage or essential blockers")
+            if not searches or not any(search.get("status") in {"complete", "partial"} for search in searches):
+                warnings.append(f"{location}: ready review has no performed external search")
+
+
 def document_ok(row: dict[str, str], field: str, active_documents: set[str]) -> bool:
     value = row.get(field, "").strip()
     return bool(value) and value in active_documents
@@ -225,6 +576,7 @@ def audit(root: Path) -> list[str]:
     documents = json.loads((control / "documents.json").read_text(encoding="utf-8"))
     active_documents: set[str] = set()
     document_versions: dict[str, set[tuple[object, str]]] = {}
+    current_document_versions: dict[str, tuple[object, str]] = {}
     seen_document_ids: set[str] = set()
     for item_number, item in enumerate(documents.get("items", []), 1):
         if not isinstance(item, dict):
@@ -255,6 +607,10 @@ def audit(root: Path) -> list[str]:
                     continue
                 versions.add((version_number, version_sha))
         document_versions[document_id] = versions
+        if versions:
+            current_document_versions[document_id] = max(
+                versions, key=lambda value: value[0] if isinstance(value[0], int) else -1
+            )
     jsonl_records: dict[str, list[tuple[int, dict]]] = {}
     jsonl_ids: dict[str, set[str]] = {}
     for filename, id_field in JSONL_IDS.items():
@@ -311,6 +667,28 @@ def audit(root: Path) -> list[str]:
         if source_id and source_id not in active_documents:
             warnings.append(f"facts.jsonl:{line_number}: source document is not active: {source_id}")
 
+    inventories_by_source: dict[tuple[str, object, str], dict] = {}
+    for line_number, record in jsonl_records["document_inventories.jsonl"]:
+        location = f"document_inventories.jsonl:{line_number}"
+        source_id = str(record.get("source_document_id", "")).strip()
+        version_key = (record.get("document_version"), str(record.get("sha256", "")).strip())
+        if source_id not in active_documents:
+            warnings.append(f"{location}: source document is not active")
+        elif version_key not in document_versions.get(source_id, set()):
+            warnings.append(f"{location}: inventory does not match a registered source version")
+        if record.get("status") not in DIMENSIONS["document_inventory_status"]:
+            warnings.append(f"{location}: unknown document inventory status")
+        expected_units = normalized_unit_set(record.get("expected_units"))
+        if record.get("status") == "complete" and expected_units is None:
+            warnings.append(f"{location}: complete inventory has invalid expected_units")
+        if not str(record.get("method", "")).strip() or not str(record.get("method_version", "")).strip():
+            warnings.append(f"{location}: inventory method and version are required")
+        if source_id and version_key[0] and version_key[1]:
+            key = (source_id, version_key[0], version_key[1])
+            prior = inventories_by_source.get(key)
+            if prior is None or record.get("status") == "complete":
+                inventories_by_source[key] = record
+
     for line_number, record in jsonl_records["reading_runs.jsonl"]:
         source_id = str(record.get("source_document_id", "")).strip()
         if source_id not in active_documents:
@@ -342,6 +720,25 @@ def audit(root: Path) -> list[str]:
                 warnings.append(f"reading_runs.jsonl:{line_number}: complete run is not bound to an exact document version")
             elif version_key not in document_versions.get(source_id, set()):
                 warnings.append(f"reading_runs.jsonl:{line_number}: document version and sha256 do not match the index")
+            inventory = inventories_by_source.get((source_id, version_key[0], version_key[1]))
+            if inventory is None or inventory.get("status") != "complete":
+                warnings.append(f"reading_runs.jsonl:{line_number}: complete run has no current complete document inventory")
+            elif isinstance(coverage, dict) and normalized_unit_set(coverage.get("expected_units")) != normalized_unit_set(
+                inventory.get("expected_units")
+            ):
+                warnings.append(f"reading_runs.jsonl:{line_number}: expected_units do not match the document inventory")
+            if inventory is not None and isinstance(coverage, dict):
+                requirements = inventory.get("reading_requirements", [])
+                checked_requirements = coverage.get("checked_requirements", [])
+                if (
+                    not isinstance(requirements, list)
+                    or not isinstance(checked_requirements, list)
+                    or any(not isinstance(value, str) or not value.strip() for value in requirements)
+                    or any(not isinstance(value, str) or not value.strip() for value in checked_requirements)
+                    or len(checked_requirements) != len(set(checked_requirements))
+                    or set(checked_requirements) != set(requirements)
+                ):
+                    warnings.append(f"reading_runs.jsonl:{line_number}: visual or structural reading requirements are unchecked")
 
     facts = jsonl_ids["facts.jsonl"]
     for line_number, record in jsonl_records["decisions.jsonl"]:
@@ -377,6 +774,15 @@ def audit(root: Path) -> list[str]:
         decision_id = str(record.get("decision_id", "")).strip()
         if decision_id and decision_id not in decisions:
             warnings.append(f"approved_requirements.jsonl:{line_number}: unknown decision_id {decision_id}")
+
+    validate_proposal_reviews(
+        root,
+        jsonl_records,
+        jsonl_ids,
+        active_documents,
+        current_document_versions,
+        warnings,
+    )
 
     sites = jsonl_ids["sites.jsonl"]
     zones = jsonl_ids["zones.jsonl"]
@@ -707,8 +1113,12 @@ def audit(root: Path) -> list[str]:
             warnings.append(f"{location}: implemented decision has no implemented_event_ids")
 
     for line_number, record in jsonl_records["quotes.jsonl"]:
-        if str(record.get("source_document_id", "")).strip() not in active_documents:
+        source_id = str(record.get("source_document_id", "")).strip()
+        if source_id not in active_documents:
             warnings.append(f"quotes.jsonl:{line_number}: quote has no active source document")
+        version_key = (record.get("document_version"), str(record.get("sha256", "")).strip())
+        if version_key not in document_versions.get(source_id, set()):
+            warnings.append(f"quotes.jsonl:{line_number}: quote is not bound to an exact registered source version")
         contractor_id = str(record.get("contractor_id", "")).strip()
         supplier_id = str(record.get("supplier_id", "")).strip()
         if bool(contractor_id) == bool(supplier_id):
@@ -784,6 +1194,23 @@ def audit(root: Path) -> list[str]:
         source_fact_ids = id_list(record, "source_fact_ids", location, warnings)
         if any(item not in facts for item in source_fact_ids):
             warnings.append(f"{location}: unknown source fact link")
+        for field in (
+            "observed_at",
+            "region",
+            "currency",
+            "tax_context",
+            "delivery_context",
+            "availability_context",
+            "source_url",
+        ):
+            if not str(record.get(field, "")).strip():
+                warnings.append(f"{location}: missing external price context {field}")
+
+    for line_number, record in jsonl_records["norm_references.jsonl"]:
+        location = f"norm_references.jsonl:{line_number}"
+        for field in ("title", "version", "territory", "checked_at", "locator", "source_url", "scope"):
+            if not str(record.get(field, "")).strip():
+                warnings.append(f"{location}: missing normative source context {field}")
 
     all_registered_ids = {project_id, *document_versions}
     for identifiers in jsonl_ids.values():
