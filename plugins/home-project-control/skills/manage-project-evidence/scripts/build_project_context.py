@@ -88,6 +88,8 @@ def build_card(root: Path) -> str:
     gaps = read_jsonl(control / "information_gaps.jsonl")
     packages = read_jsonl(control / "project_packages.jsonl")
     requests = current_requests(read_jsonl(control / "analysis_requests.jsonl"))
+    management_baselines = read_jsonl(control / "management_baselines.jsonl")
+    control_snapshots = read_jsonl(control / "control_snapshots.jsonl")
 
     current_as_is = current_versioned(
         as_is_snapshots,
@@ -229,6 +231,40 @@ def build_card(root: Path) -> str:
             "- Базовая линия «что принято сделать»: "
             f"{current_baseline.get('baseline_snapshot_id')} · версия {current_baseline.get('baseline_version')} · "
             f"{bullet(current_baseline.get('scope'))}"
+        )
+    accepted_management = [
+        value for value in management_baselines
+        if value.get("status") == "accepted" and isinstance(value.get("baseline_version"), int)
+    ]
+    current_management = max(
+        accepted_management,
+        key=lambda value: value["baseline_version"],
+        default=None,
+    )
+    if current_management is None:
+        lines.append("- Управленческая база «стоимость + срок»: ещё не принята владельцем")
+    else:
+        lines.append(
+            "- Управленческая база «стоимость + срок»: "
+            f"{current_management.get('management_baseline_id')} · версия "
+            f"{current_management.get('baseline_version')}"
+        )
+        current_control = max(
+            (
+                value for value in control_snapshots
+                if value.get("management_baseline_id") == current_management.get("management_baseline_id")
+            ),
+            key=lambda value: (str(value.get("data_date", "")), str(value.get("control_snapshot_id", ""))),
+            default=None,
+        )
+        lines.append(
+            "- Последний план-факт: "
+            + (
+                f"{current_control.get('control_snapshot_id')} · {current_control.get('data_date')} "
+                f"[{current_control.get('status')}]"
+                if current_control
+                else "ещё не сформирован"
+            )
         )
     lines.extend(["", "## Открытые вопросы", ""])
     if open_gaps:

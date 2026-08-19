@@ -29,6 +29,19 @@ def read_optional_csv(path: Path) -> list[dict[str, str]]:
     return read_csv(path) if path.is_file() else []
 
 
+def read_optional_jsonl(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    result = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.strip():
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError(f"{path.name} contains a non-object record")
+            result.append(value)
+    return result
+
+
 def iso_date(value: str) -> date | None:
     try:
         return date.fromisoformat(value.strip()) if value.strip() else None
@@ -67,6 +80,8 @@ def main() -> int:
     commitments = read_optional_csv(control / "commitments.csv")
     acceptance = read_optional_csv(control / "acceptance.csv")
     procurement = read_optional_csv(control / "procurement.csv")
+    management_baselines = read_optional_jsonl(control / "management_baselines.jsonl")
+    control_snapshots = read_optional_jsonl(control / "control_snapshots.jsonl")
     confirmed: dict[str, Decimal] = defaultdict(Decimal)
     other: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
     evidence_warnings = []
@@ -135,6 +150,59 @@ def main() -> int:
         lines.append(f"- Приёмка {row.get('acceptance_id', 'без ID')}: этап {row.get('work_item_id', 'не указан')} [{row.get('status', 'unknown')}]")
     for row in active_procurement[:10]:
         lines.append(f"- Закупка {row.get('procurement_id', 'без ID')}: {row.get('item', '')} [{row.get('status', 'unknown')}]")
+    lines.extend(["", "## Управленческая база и прогноз", ""])
+    accepted_baselines = [
+        value for value in management_baselines
+        if value.get("status") == "accepted" and isinstance(value.get("baseline_version"), int)
+    ]
+    current_baseline = max(accepted_baselines, key=lambda value: value["baseline_version"], default=None)
+    if current_baseline is None:
+        lines.append("- Принятой управленческой базы нет; отклонение стоимости и срока не рассчитывается.")
+    else:
+        lines.append(
+            f"- Текущая база: {current_baseline.get('management_baseline_id')} "
+            f"(версия {current_baseline.get('baseline_version')})."
+        )
+        matching_snapshots = [
+            value for value in control_snapshots
+            if value.get("management_baseline_id") == current_baseline.get("management_baseline_id")
+        ]
+        latest_snapshot = max(
+            matching_snapshots,
+            key=lambda value: (str(value.get("data_date", "")), str(value.get("control_snapshot_id", ""))),
+            default=None,
+        )
+        if latest_snapshot is None:
+            lines.append("- Контрольного среза по текущей базе ещё нет.")
+        else:
+            metrics = latest_snapshot.get("metrics", {}) if isinstance(latest_snapshot.get("metrics"), dict) else {}
+            lines.append(
+                f"- Последний срез: {latest_snapshot.get('data_date', 'дата не указана')} "
+                f"[{latest_snapshot.get('status', 'unknown')}]."
+            )
+            money_fields = (
+                ("Текущий бюджет", "current_budget"),
+                ("Подтверждённый факт", "confirmed_actual_cost"),
+                ("Прогноз итоговой стоимости", "forecast_at_completion"),
+                ("Прогнозное отклонение стоимости", "cost_variance_at_completion"),
+            )
+            currency = latest_snapshot.get("currency", "валюта не указана")
+            for label, field in money_fields:
+                value = metrics.get(field)
+                lines.append(f"- {label}: {fmt(Decimal(str(value)))} {currency}." if isinstance(value, (int, float)) else f"- {label}: не рассчитано.")
+            planned = metrics.get("planned_progress_percent")
+            actual_progress = metrics.get("actual_progress_percent")
+            lines.append(
+                "- Прогресс: план "
+                + (f"{planned:.2f}%" if isinstance(planned, (int, float)) else "не рассчитан")
+                + ", факт "
+                + (f"{actual_progress:.2f}%." if isinstance(actual_progress, (int, float)) else "не подтверждён.")
+            )
+            lines.append(
+                f"- Завершение: база {metrics.get('baseline_finish') or 'не рассчитана'}, "
+                f"прогноз {metrics.get('forecast_finish') or 'не рассчитан'}, "
+                f"отклонение {metrics.get('schedule_variance_calendar_days') if metrics.get('schedule_variance_calendar_days') is not None else 'не рассчитано'} календарных дней."
+            )
     lines.extend(["", "## Контроль качества данных", ""])
     if evidence_warnings:
         lines.append("- `confirmed_paid` без действующего документа или локатора: " + ", ".join(evidence_warnings))
