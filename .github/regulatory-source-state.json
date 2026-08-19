@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "catalog_id": "home-project-control-ru-official-regulatory-sources",
+  "updated_at": "2026-08-19T14:16:55.313744+00:00",
+  "sources": {
+    "rosstandart-federal-fund": {
+      "source_id": "rosstandart-federal-fund",
+      "url": "https://protect.gost.ru/gost?month=0&year=0",
+      "checked_at": "2026-08-19T14:16:55.313744+00:00",
+      "http_status": 200,
+      "content_sha256": "4f9849ddde99fb63903c5fef306baf5601a41c4f1340ea491098cb8c427e8edb",
+      "content_length": 172901,
+      "fingerprint_length": 16183,
+      "fingerprint_mode": "html_visible_text",
+      "etag": "",
+      "last_modified": ""
+    },
+    "minstroy-documents": {
+      "source_id": "minstroy-documents",
+      "url": "https://www.minstroyrf.gov.ru/docs/",
+      "checked_at": "2026-08-19T14:16:55.313744+00:00",
+      "http_status": 200,
+      "content_sha256": "49ffd0fc15966e9023adfc9bf30995f3f67026ce5859843f9d5e1970410be11d",
+      "content_length": 61400,
+      "fingerprint_length": 19197,
+      "fingerprint_mode": "html_visible_text",
+      "etag": "",
+      "last_modified": ""
+    }
+  }
+}

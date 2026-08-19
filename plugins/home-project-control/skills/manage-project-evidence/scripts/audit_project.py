@@ -215,6 +215,491 @@ def records_by_id(records: list[tuple[int, dict]], id_field: str) -> dict[str, d
     return result
 
 
+def normalized_string_set(value: object) -> set[str] | None:
+    if not isinstance(value, list):
+        return None
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return None
+        result.append(item.strip())
+    if len(result) != len(set(result)):
+        return None
+    return set(result)
+
+
+def normalized_package_pairs(value: object) -> set[tuple[str, str]] | None:
+    if not isinstance(value, list):
+        return None
+    result: list[tuple[str, str]] = []
+    for pair in value:
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(not isinstance(item, str) or not item.strip() for item in pair)
+            or pair[0].strip() == pair[1].strip()
+        ):
+            return None
+        result.append(tuple(sorted((pair[0].strip(), pair[1].strip()))))
+    if len(result) != len(set(result)):
+        return None
+    return set(result)
+
+
+def validate_analysis_layer(
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    active_documents: set[str],
+    document_versions: dict[str, set[tuple[object, str]]],
+    complete_read_versions: set[tuple[str, object, str]],
+    warnings: list[str],
+) -> None:
+    facts = jsonl_ids["facts.jsonl"]
+    requirements = jsonl_ids["approved_requirements.jsonl"]
+    packages = jsonl_ids["project_packages.jsonl"]
+    gaps = jsonl_ids["information_gaps.jsonl"]
+    resources = jsonl_ids["shared_resources.jsonl"]
+    demands = jsonl_ids["resource_demands.jsonl"]
+    sites = jsonl_ids["sites.jsonl"]
+    zones = jsonl_ids["zones.jsonl"]
+    systems = jsonl_ids["systems.jsonl"]
+    decisions = jsonl_ids["decisions.jsonl"]
+    reading_runs = records_by_id(jsonl_records["reading_runs.jsonl"], "reading_run_id")
+    all_registered_ids: set[str] = set(active_documents)
+    for identifiers in jsonl_ids.values():
+        all_registered_ids.update(identifiers)
+
+    def linked_ids(record: dict, field: str, known: set[str], location: str) -> list[str]:
+        values = id_list(record, field, location, warnings)
+        if any(value not in known for value in values):
+            warnings.append(f"{location}: {field} contains an unknown link")
+        return values
+
+    for line_number, record in jsonl_records["project_packages.jsonl"]:
+        location = f"project_packages.jsonl:{line_number}"
+        for field in ("name", "goal"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        if record.get("status") not in DIMENSIONS["project_package_status"]:
+            warnings.append(f"{location}: unknown project package status")
+        disciplines = normalized_string_set(record.get("disciplines"))
+        if not disciplines:
+            warnings.append(f"{location}: disciplines must be a non-empty unique string array")
+        linked_ids(record, "fact_ids", facts, location)
+        linked_ids(record, "requirement_ids", requirements, location)
+        linked_ids(record, "information_gap_ids", gaps, location)
+        linked_ids(record, "site_ids", sites, location)
+        linked_ids(record, "zone_ids", zones, location)
+        linked_ids(record, "system_ids", systems, location)
+        versions = record.get("source_document_versions")
+        if not isinstance(versions, list):
+            warnings.append(f"{location}: source_document_versions must be an array")
+        else:
+            for number, version in enumerate(versions, 1):
+                if not isinstance(version, dict):
+                    warnings.append(f"{location}: source document version {number} must be an object")
+                    continue
+                document_id = str(version.get("document_id", "")).strip()
+                version_key = (version.get("document_version"), str(version.get("sha256", "")).strip())
+                if document_id not in active_documents or version_key not in document_versions.get(document_id, set()):
+                    warnings.append(f"{location}: source document version {number} is not an exact active version")
+
+    for line_number, record in jsonl_records["fact_extraction_runs.jsonl"]:
+        location = f"fact_extraction_runs.jsonl:{line_number}"
+        status = record.get("status")
+        if status not in DIMENSIONS["fact_extraction_status"]:
+            warnings.append(f"{location}: unknown fact extraction status")
+        document_id = str(record.get("source_document_id", "")).strip()
+        version_key = (record.get("document_version"), str(record.get("sha256", "")).strip())
+        exact_key = (document_id, version_key[0], version_key[1])
+        if document_id not in active_documents or version_key not in document_versions.get(document_id, set()):
+            warnings.append(f"{location}: extraction is not bound to an exact active document version")
+        reading_run_id = str(record.get("reading_run_id", "")).strip()
+        reading_run = reading_runs.get(reading_run_id)
+        if reading_run is None:
+            warnings.append(f"{location}: unknown reading_run_id")
+        elif (
+            reading_run.get("source_document_id") != document_id
+            or reading_run.get("document_version") != version_key[0]
+            or str(reading_run.get("sha256", "")).strip() != version_key[1]
+        ):
+            warnings.append(f"{location}: reading run belongs to a different document version")
+        fact_ids = linked_ids(record, "fact_ids", facts, location)
+        linked_ids(record, "requirement_ids", requirements, location)
+        linked_ids(record, "information_gap_ids", gaps, location)
+        linked_ids(record, "conflict_fact_ids", facts, location)
+        expected = normalized_string_set(record.get("expected_sections"))
+        checked = normalized_string_set(record.get("checked_sections"))
+        coverage_gaps = record.get("coverage_gaps")
+        if status == "complete":
+            if exact_key not in complete_read_versions:
+                warnings.append(f"{location}: complete extraction has no complete ReadingRun for the exact version")
+            if not expected or checked != expected or not isinstance(coverage_gaps, list) or coverage_gaps:
+                warnings.append(f"{location}: complete extraction has unresolved or inconsistent semantic coverage")
+            if not fact_ids:
+                warnings.append(f"{location}: complete extraction has no extracted facts")
+
+    for line_number, record in jsonl_records["information_gaps.jsonl"]:
+        location = f"information_gaps.jsonl:{line_number}"
+        for field in ("description", "blocked_conclusion", "required_provider", "required_format"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        status = record.get("status")
+        if status not in DIMENSIONS["information_gap_status"]:
+            warnings.append(f"{location}: unknown information gap status")
+        linked_ids(record, "package_ids", packages, location)
+        linked_ids(record, "blocked_entity_ids", all_registered_ids, location)
+        answer_ids = linked_ids(record, "answer_source_ids", all_registered_ids, location)
+        if status in {"answered", "verified"} and not answer_ids:
+            warnings.append(f"{location}: answered or verified gap has no answer sources")
+
+    for line_number, record in jsonl_records["shared_resources.jsonl"]:
+        location = f"shared_resources.jsonl:{line_number}"
+        if not isinstance(record.get("name"), str) or not record["name"].strip():
+            warnings.append(f"{location}: missing required field name")
+        if record.get("resource_type") not in DIMENSIONS["shared_resource_type"]:
+            warnings.append(f"{location}: unknown shared resource type")
+        site_id = str(record.get("site_id", "")).strip()
+        if site_id and site_id not in sites:
+            warnings.append(f"{location}: unknown site_id")
+        linked_ids(record, "zone_ids", zones, location)
+        linked_ids(record, "source_fact_ids", facts, location)
+
+    for line_number, record in jsonl_records["resource_demands.jsonl"]:
+        location = f"resource_demands.jsonl:{line_number}"
+        if str(record.get("package_id", "")).strip() not in packages:
+            warnings.append(f"{location}: unknown package_id")
+        if str(record.get("resource_id", "")).strip() not in resources:
+            warnings.append(f"{location}: unknown resource_id")
+        if not isinstance(record.get("description"), str) or not record["description"].strip():
+            warnings.append(f"{location}: missing required field description")
+        if record.get("status") not in DIMENSIONS["resource_demand_status"]:
+            warnings.append(f"{location}: unknown resource demand status")
+        source_ids = linked_ids(record, "source_fact_ids", facts, location)
+        gap_ids = linked_ids(record, "information_gap_ids", gaps, location)
+        if not source_ids and not gap_ids:
+            warnings.append(f"{location}: demand needs a source fact or an information gap")
+
+    for line_number, record in jsonl_records["package_interfaces.jsonl"]:
+        location = f"package_interfaces.jsonl:{line_number}"
+        package_ids = linked_ids(record, "package_ids", packages, location)
+        if len(set(package_ids)) != 2:
+            warnings.append(f"{location}: package_ids must contain exactly two different packages")
+        if record.get("interface_type") not in DIMENSIONS["package_interface_type"]:
+            warnings.append(f"{location}: unknown package interface type")
+        if not isinstance(record.get("description"), str) or not record["description"].strip():
+            warnings.append(f"{location}: missing required field description")
+        linked_ids(record, "resource_ids", resources, location)
+        linked_ids(record, "source_fact_ids", facts, location)
+
+    for line_number, record in jsonl_records["coordination_issues.jsonl"]:
+        location = f"coordination_issues.jsonl:{line_number}"
+        package_ids = linked_ids(record, "package_ids", packages, location)
+        if len(set(package_ids)) < 2:
+            warnings.append(f"{location}: coordination issue must link at least two packages")
+        if record.get("issue_type") not in DIMENSIONS["coordination_issue_type"]:
+            warnings.append(f"{location}: unknown coordination issue type")
+        if record.get("status") not in DIMENSIONS["coordination_issue_status"]:
+            warnings.append(f"{location}: unknown coordination issue status")
+        if not isinstance(record.get("description"), str) or not record["description"].strip():
+            warnings.append(f"{location}: missing required field description")
+        linked_ids(record, "resource_ids", resources, location)
+        linked_ids(record, "source_fact_ids", facts, location)
+        linked_ids(record, "information_gap_ids", gaps, location)
+        decision_id = str(record.get("owner_decision_id", "")).strip()
+        if decision_id and decision_id not in decisions:
+            warnings.append(f"{location}: unknown owner_decision_id")
+        if record.get("status") in {"resolved", "accepted_risk"} and not (
+            decision_id or normalized_string_set(record.get("resolution_source_ids"))
+        ):
+            warnings.append(f"{location}: resolved issue has no resolution evidence")
+
+    for line_number, record in jsonl_records["coordination_runs.jsonl"]:
+        location = f"coordination_runs.jsonl:{line_number}"
+        status = record.get("status")
+        if status not in DIMENSIONS["coordination_run_status"]:
+            warnings.append(f"{location}: unknown coordination run status")
+        package_ids = linked_ids(record, "package_ids", packages, location)
+        linked_ids(record, "resource_demand_ids", demands, location)
+        linked_ids(record, "issue_ids", jsonl_ids["coordination_issues.jsonl"], location)
+        expected_pairs = normalized_package_pairs(record.get("expected_package_pairs"))
+        checked_pairs = normalized_package_pairs(record.get("checked_package_pairs"))
+        if expected_pairs is not None and any(item not in packages for pair in expected_pairs for item in pair):
+            warnings.append(f"{location}: package-pair coverage contains an unknown package")
+        if status == "complete" and (
+            len(set(package_ids)) < 2
+            or not expected_pairs
+            or checked_pairs != expected_pairs
+            or record.get("coverage_gaps") != []
+        ):
+            warnings.append(f"{location}: complete coordination run has unresolved or inconsistent coverage")
+
+
+def validate_regulatory_layer(
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    active_documents: set[str],
+    warnings: list[str],
+) -> None:
+    norms = jsonl_ids["norm_references.jsonl"]
+    requirements = jsonl_ids["regulatory_requirements.jsonl"]
+    assessments = jsonl_ids["compliance_assessments.jsonl"]
+    results = jsonl_ids["compliance_results.jsonl"]
+    gaps = jsonl_ids["information_gaps.jsonl"]
+    facts = jsonl_ids["facts.jsonl"]
+    findings = jsonl_ids["findings.jsonl"]
+    requirement_records = records_by_id(
+        jsonl_records["regulatory_requirements.jsonl"], "regulatory_requirement_id"
+    )
+    result_records = records_by_id(jsonl_records["compliance_results.jsonl"], "compliance_result_id")
+    assessed_norm_ids: set[str] = set()
+    for _, assessment in jsonl_records["compliance_assessments.jsonl"]:
+        value = assessment.get("norm_reference_ids")
+        if isinstance(value, list):
+            assessed_norm_ids.update(
+                item.strip() for item in value if isinstance(item, str) and item.strip()
+            )
+    all_registered_ids = set(active_documents)
+    for identifiers in jsonl_ids.values():
+        all_registered_ids.update(identifiers)
+
+    def linked_ids(record: dict, field: str, known: set[str], location: str) -> list[str]:
+        values = id_list(record, field, location, warnings)
+        if any(value not in known for value in values):
+            warnings.append(f"{location}: {field} contains an unknown link")
+        return values
+
+    for line_number, record in jsonl_records["norm_references.jsonl"]:
+        location = f"norm_references.jsonl:{line_number}"
+        norm_id = str(record.get("norm_reference_id", "")).strip()
+        current_markers = (
+            "designation",
+            "document_kind",
+            "document_status",
+            "jurisdiction",
+            "status_source_url",
+        )
+        if norm_id not in assessed_norm_ids and not any(field in record for field in current_markers):
+            for field in ("title", "version", "territory", "checked_at", "locator", "source_url", "scope"):
+                if not isinstance(record.get(field), str) or not record[field].strip():
+                    warnings.append(f"{location}: incomplete legacy normative source context {field}")
+            continue
+        for field in (
+            "designation",
+            "title",
+            "version",
+            "jurisdiction",
+            "territory",
+            "checked_at",
+            "status_source_url",
+            "source_url",
+            "scope",
+        ):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing normative source context {field}")
+        if record.get("document_kind") not in DIMENSIONS["norm_document_kind"]:
+            warnings.append(f"{location}: unknown norm document kind")
+        if record.get("document_status") not in DIMENSIONS["norm_document_status"]:
+            warnings.append(f"{location}: unknown norm document status")
+        linked_ids(record, "supersedes_norm_reference_ids", norms, location)
+        linked_ids(record, "replacement_norm_reference_ids", norms, location)
+
+    for line_number, record in jsonl_records["regulatory_requirements.jsonl"]:
+        location = f"regulatory_requirements.jsonl:{line_number}"
+        norm_id = str(record.get("norm_reference_id", "")).strip()
+        if norm_id not in norms:
+            warnings.append(f"{location}: unknown norm_reference_id")
+        for field in (
+            "locator",
+            "statement",
+            "scope_conditions",
+            "verification_method",
+            "specialist_boundary",
+            "source_url",
+            "extracted_at",
+        ):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        if record.get("verification_status") not in DIMENSIONS["verification_status"]:
+            warnings.append(f"{location}: missing or unknown verification_status")
+
+    for line_number, record in jsonl_records["compliance_results.jsonl"]:
+        location = f"compliance_results.jsonl:{line_number}"
+        assessment_id = str(record.get("assessment_id", "")).strip()
+        requirement_id = str(record.get("requirement_id", "")).strip()
+        if assessment_id not in assessments:
+            warnings.append(f"{location}: unknown assessment_id")
+        if requirement_id not in requirements:
+            warnings.append(f"{location}: unknown requirement_id")
+        if record.get("applicability_status") not in DIMENSIONS["regulatory_applicability_status"]:
+            warnings.append(f"{location}: unknown applicability_status")
+        compliance_status = record.get("compliance_status")
+        if compliance_status not in DIMENSIONS["regulatory_compliance_status"]:
+            warnings.append(f"{location}: unknown compliance_status")
+        for field in ("basis", "checked_at"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        target_ids = linked_ids(record, "target_entity_ids", all_registered_ids, location)
+        if not target_ids:
+            warnings.append(f"{location}: target_entity_ids must not be empty")
+        evidence_ids = linked_ids(record, "evidence_fact_ids", facts, location)
+        finding_ids = linked_ids(record, "finding_ids", findings, location)
+        gap_ids = linked_ids(record, "information_gap_ids", gaps, location)
+        if compliance_status in {"conforms", "partially_conforms", "conflicts"} and not (
+            evidence_ids or finding_ids
+        ):
+            warnings.append(f"{location}: compliance conclusion has no fact or finding evidence")
+        if compliance_status == "not_verified" and not gap_ids:
+            warnings.append(f"{location}: not_verified result has no information gap")
+        if compliance_status == "not_applicable" and record.get("applicability_status") != "not_applicable":
+            warnings.append(f"{location}: not_applicable result needs not_applicable applicability")
+        if record.get("applicability_status") == "not_applicable" and compliance_status != "not_applicable":
+            warnings.append(f"{location}: not_applicable applicability needs a not_applicable result")
+        if record.get("applicability_status") == "undetermined" and compliance_status not in {
+            "not_verified",
+            "requires_specialist",
+        }:
+            warnings.append(f"{location}: undetermined applicability cannot support a conformity conclusion")
+
+    for line_number, record in jsonl_records["compliance_assessments.jsonl"]:
+        location = f"compliance_assessments.jsonl:{line_number}"
+        for field in ("jurisdiction", "scope", "assessed_at"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        if record.get("assessment_type") not in DIMENSIONS["regulatory_assessment_type"]:
+            warnings.append(f"{location}: unknown assessment_type")
+        status = record.get("status")
+        if status not in DIMENSIONS["regulatory_assessment_status"]:
+            warnings.append(f"{location}: unknown regulatory assessment status")
+        target_ids = linked_ids(record, "target_entity_ids", all_registered_ids, location)
+        if not target_ids:
+            warnings.append(f"{location}: target_entity_ids must not be empty")
+        norm_ids = linked_ids(record, "norm_reference_ids", norms, location)
+        expected_ids = linked_ids(record, "expected_requirement_ids", requirements, location)
+        checked_ids = linked_ids(record, "checked_requirement_ids", requirements, location)
+        result_ids = linked_ids(record, "result_ids", results, location)
+        linked_ids(record, "information_gap_ids", gaps, location)
+        limitations = record.get("limitations")
+        if not isinstance(limitations, list) or any(
+            not isinstance(value, str) or not value.strip() for value in limitations
+        ):
+            warnings.append(f"{location}: limitations must be an array of non-empty strings")
+        if status == "complete":
+            if not norm_ids or not expected_ids:
+                warnings.append(f"{location}: complete assessment has no normative scope")
+            if set(checked_ids) != set(expected_ids) or len(checked_ids) != len(set(checked_ids)):
+                warnings.append(f"{location}: complete assessment has incomplete requirement coverage")
+            linked_results = [result_records[value] for value in result_ids if value in result_records]
+            for requirement_id in expected_ids:
+                requirement = requirement_records.get(requirement_id)
+                if requirement and requirement.get("norm_reference_id") not in norm_ids:
+                    warnings.append(f"{location}: expected requirement is outside norm_reference_ids")
+            assessment_targets = set(target_ids)
+            for linked_result in linked_results:
+                result_targets = {
+                    value.strip()
+                    for value in linked_result.get("target_entity_ids", [])
+                    if isinstance(value, str) and value.strip()
+                } if isinstance(linked_result.get("target_entity_ids"), list) else set()
+                if not result_targets.issubset(assessment_targets):
+                    warnings.append(f"{location}: linked result target is outside assessment target_entity_ids")
+            result_requirement_ids = [
+                str(value.get("requirement_id", "")).strip()
+                for value in linked_results
+                if value.get("assessment_id") == record.get("compliance_assessment_id")
+            ]
+            if (
+                len(linked_results) != len(result_ids)
+                or sorted(result_requirement_ids) != sorted(expected_ids)
+                or len(result_requirement_ids) != len(set(result_requirement_ids))
+            ):
+                warnings.append(f"{location}: complete assessment does not have one result per requirement")
+
+    for line_number, record in jsonl_records["regulatory_sync_runs.jsonl"]:
+        location = f"regulatory_sync_runs.jsonl:{line_number}"
+        if record.get("status") not in DIMENSIONS["regulatory_sync_status"]:
+            warnings.append(f"{location}: unknown regulatory sync status")
+        if not isinstance(record.get("checked_at"), str) or not record["checked_at"].strip():
+            warnings.append(f"{location}: missing checked_at")
+        source_urls = normalized_string_set(record.get("source_urls"))
+        if not source_urls:
+            warnings.append(f"{location}: source_urls must be a non-empty unique string array")
+        linked_ids(record, "norm_reference_ids", norms, location)
+        linked_ids(record, "detected_change_norm_reference_ids", norms, location)
+        source_checks = record.get("source_checks")
+        if not isinstance(source_checks, list) or not source_checks:
+            warnings.append(f"{location}: source_checks must be a non-empty array")
+            continue
+        checked_urls: list[str] = []
+        change_statuses: list[str] = []
+        for number, check in enumerate(source_checks, 1):
+            if not isinstance(check, dict):
+                warnings.append(f"{location}: source check {number} must be an object")
+                continue
+            for field in ("source_id", "url", "checked_at", "change_status"):
+                if not isinstance(check.get(field), str) or not check[field].strip():
+                    warnings.append(f"{location}: source check {number} missing {field}")
+            checked_urls.append(str(check.get("url", "")).strip())
+            change_statuses.append(str(check.get("change_status", "")).strip())
+            if check.get("change_status") not in {"unchanged", "changed", "baseline_created", "error"}:
+                warnings.append(f"{location}: source check {number} has unknown change_status")
+            if check.get("change_status") != "error" and not str(check.get("content_sha256", "")).strip():
+                warnings.append(f"{location}: source check {number} has no content_sha256")
+        if len(checked_urls) != len(set(checked_urls)):
+            warnings.append(f"{location}: source_checks repeat a URL")
+        if record.get("status") == "complete":
+            if source_urls is not None and set(checked_urls) != source_urls:
+                warnings.append(f"{location}: complete sync does not cover every source URL")
+            if "error" in change_statuses:
+                warnings.append(f"{location}: complete sync contains a failed source check")
+
+
+def validate_fact_records(
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    active_documents: set[str],
+    document_versions: dict[str, set[tuple[object, str]]],
+    warnings: list[str],
+) -> None:
+    for line_number, record in jsonl_records["facts.jsonl"]:
+        location = f"facts.jsonl:{line_number}"
+        for field in ("statement_kind", "evidence_origin", "verification_status"):
+            value = str(record.get(field, "")).strip()
+            if not value:
+                warnings.append(f"{location}: missing ontology field {field}")
+            elif value not in DIMENSIONS[field]:
+                warnings.append(f"{location}: unknown {field} {value}")
+        for field in ("statement", "locator", "recorded_at"):
+            if not isinstance(record.get(field), str) or not record[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        disciplines = normalized_string_set(record.get("discipline_ids"))
+        if disciplines is None:
+            warnings.append(f"{location}: discipline_ids must be a unique string array")
+        for field, registry in (
+            ("package_ids", "project_packages.jsonl"),
+            ("site_ids", "sites.jsonl"),
+            ("zone_ids", "zones.jsonl"),
+            ("system_ids", "systems.jsonl"),
+        ):
+            if not isinstance(record.get(field), list):
+                warnings.append(f"{location}: required field {field} must be an array")
+            else:
+                linked = id_list(record, field, location, warnings)
+                if any(identifier not in jsonl_ids[registry] for identifier in linked):
+                    warnings.append(f"{location}: {field} contains an unknown link")
+        source_id = str(record.get("source_document_id", "")).strip()
+        if source_id and source_id not in active_documents:
+            warnings.append(f"{location}: source document is not active: {source_id}")
+        if source_id:
+            version_key = (record.get("document_version"), str(record.get("sha256", "")).strip())
+            if version_key not in document_versions.get(source_id, set()):
+                warnings.append(f"{location}: fact is not bound to an exact registered source version")
+        elif record.get("evidence_origin") not in {"owner_confirmation", "agreed_assumption"} and not str(
+            record.get("source_url", "")
+        ).strip():
+            warnings.append(f"{location}: fact has no source document, owner basis or external source URL")
+
+
 def validate_review_contract(
     review: dict,
     registered_ids: set[str],
@@ -410,6 +895,16 @@ def validate_review_contract(
         if not str(review.get("additional_analysis_summary", "")).strip():
             errors.append("additional_analysis_summary is required for the current contract")
 
+        for field, allow_empty in (
+            ("fact_extraction_run_ids", False),
+            ("project_package_ids", False),
+            ("information_gap_ids", True),
+            ("coordination_issue_ids", True),
+        ):
+            linked = strings(review.get(field), field, allow_empty=allow_empty)
+            if any(identifier not in registered_ids for identifier in linked):
+                errors.append(f"{field} contains an unknown registered entity")
+
         foreman = review.get("foreman_assessment")
         if not isinstance(foreman, dict):
             errors.append("foreman_assessment must be an object")
@@ -421,6 +916,13 @@ def validate_review_contract(
             errors.append("foreman_assessment has an unknown decision_readiness")
         if not str(foreman.get("summary", "")).strip():
             errors.append("foreman_assessment has no summary")
+        if not str(foreman.get("decision_request", "")).strip():
+            errors.append("foreman_assessment has no exact decision_request")
+        preferred_alternative_id = str(foreman.get("preferred_alternative_id", "")).strip()
+        if preferred_alternative_id and preferred_alternative_id not in known_alternatives:
+            errors.append("foreman_assessment refers to an unknown preferred_alternative_id")
+        if not str(foreman.get("preferred_alternative_rationale", "")).strip():
+            errors.append("foreman_assessment has no preferred_alternative_rationale")
         strings(foreman.get("decisive_reasons", []), "foreman_assessment.decisive_reasons", allow_empty=False)
         strings(foreman.get("conditions_before_contract", []), "foreman_assessment.conditions_before_contract")
         strings(foreman.get("conditions_before_work", []), "foreman_assessment.conditions_before_work")
@@ -816,9 +1318,13 @@ def validate_proposal_reviews(
 ) -> None:
     inventories = records_by_id(jsonl_records["document_inventories.jsonl"], "inventory_id")
     reading_runs = records_by_id(jsonl_records["reading_runs.jsonl"], "reading_run_id")
+    extraction_runs = records_by_id(jsonl_records["fact_extraction_runs.jsonl"], "extraction_run_id")
     quotes = records_by_id(jsonl_records["quotes.jsonl"], "quote_id")
     quote_items = records_by_id(jsonl_records["quote_items.jsonl"], "quote_item_id")
     baseline_snapshots = records_by_id(jsonl_records["baseline_snapshots.jsonl"], "baseline_snapshot_id")
+    compliance_assessments = records_by_id(
+        jsonl_records["compliance_assessments.jsonl"], "compliance_assessment_id"
+    )
     registered_ids = set(active_documents)
     for values in jsonl_ids.values():
         registered_ids.update(values)
@@ -904,6 +1410,59 @@ def validate_proposal_reviews(
                     and summary_valid
                 ):
                     complete_run = True
+
+        extraction_ids = id_list(review, "fact_extraction_run_ids", location, warnings)
+        complete_extraction = False
+        for extraction_id in extraction_ids:
+            extraction = extraction_runs.get(extraction_id)
+            if extraction is None:
+                warnings.append(f"{location}: unknown fact extraction run {extraction_id}")
+                continue
+            expected_sections = normalized_string_set(extraction.get("expected_sections"))
+            checked_sections = normalized_string_set(extraction.get("checked_sections"))
+            if (
+                extraction.get("source_document_id") == source_id
+                and (extraction.get("document_version"), str(extraction.get("sha256", "")).strip()) == version_key
+                and extraction.get("status") == "complete"
+                and expected_sections
+                and checked_sections == expected_sections
+                and extraction.get("coverage_gaps") == []
+            ):
+                complete_extraction = True
+        package_ids = id_list(review, "project_package_ids", location, warnings)
+        if current_contract and (
+            not package_ids or any(value not in jsonl_ids["project_packages.jsonl"] for value in package_ids)
+        ):
+            warnings.append(f"{location}: current review needs at least one known project package")
+        for field, registry in (
+            ("information_gap_ids", "information_gaps.jsonl"),
+            ("coordination_issue_ids", "coordination_issues.jsonl"),
+        ):
+            linked = id_list(review, field, location, warnings)
+            if any(value not in jsonl_ids[registry] for value in linked):
+                warnings.append(f"{location}: {field} contains an unknown link")
+        if current_contract and not isinstance(review.get("compliance_assessment_ids"), list):
+            warnings.append(f"{location}: compliance_assessment_ids must be an array")
+        compliance_ids = id_list(review, "compliance_assessment_ids", location, warnings)
+        if any(value not in compliance_assessments for value in compliance_ids):
+            warnings.append(f"{location}: compliance_assessment_ids contains an unknown link")
+        mandatory_checks = review.get("mandatory_checks", [])
+        normative_check = next(
+            (
+                value
+                for value in mandatory_checks
+                if isinstance(value, dict) and value.get("check_id") == "norms_and_specialist_boundary"
+            ),
+            None,
+        )
+        if current_contract and isinstance(normative_check, dict) and normative_check.get("status") == "completed":
+            if not compliance_ids:
+                warnings.append(f"{location}: completed normative check needs a ComplianceAssessment")
+            elif any(compliance_assessments[value].get("status") != "complete" for value in compliance_ids if value in compliance_assessments):
+                warnings.append(f"{location}: completed normative check links a non-complete ComplianceAssessment")
+            normative_sources = id_list(normative_check, "source_ids", location, warnings)
+            if not set(normative_sources) & set(compliance_ids):
+                warnings.append(f"{location}: completed normative check does not cite its ComplianceAssessment")
 
         baseline_mode = review.get("baseline_assessment_mode")
         baseline_snapshot_id = str(review.get("baseline_snapshot_id", "")).strip()
@@ -1152,6 +1711,7 @@ def validate_proposal_reviews(
                 inventory is None
                 or inventory.get("status") != "complete"
                 or not complete_run
+                or (current_contract and not complete_extraction)
                 or blockers
                 or (current_contract and baseline_mode not in DIMENSIONS["baseline_assessment_mode"])
                 or (current_contract and baseline_mode == "accepted_baseline" and not baseline_ids)
@@ -1268,16 +1828,7 @@ def audit(root: Path) -> list[str]:
         if row.get("status", "").strip() == "accepted" and not document_ok(row, "evidence_document_id", active_documents):
             warnings.append(f"procurement.csv:{row.get('procurement_id', 'без ID')}: accepted without active evidence document")
 
-    for line_number, record in jsonl_records["facts.jsonl"]:
-        for field in ("statement_kind", "evidence_origin", "verification_status"):
-            value = str(record.get(field, "")).strip()
-            if not value:
-                warnings.append(f"facts.jsonl:{line_number}: missing ontology field {field}")
-            elif value not in DIMENSIONS[field]:
-                warnings.append(f"facts.jsonl:{line_number}: unknown {field} {value}")
-        source_id = str(record.get("source_document_id", "")).strip()
-        if source_id and source_id not in active_documents:
-            warnings.append(f"facts.jsonl:{line_number}: source document is not active: {source_id}")
+    validate_fact_records(jsonl_records, jsonl_ids, active_documents, document_versions, warnings)
 
     inventories_by_source: dict[tuple[str, object, str], dict] = {}
     for line_number, record in jsonl_records["document_inventories.jsonl"]:
@@ -1396,6 +1947,16 @@ def audit(root: Path) -> list[str]:
             and summary_valid
         ):
             complete_read_versions.add((source_id, version, sha256))
+
+    validate_analysis_layer(
+        jsonl_records,
+        jsonl_ids,
+        active_documents,
+        document_versions,
+        complete_read_versions,
+        warnings,
+    )
+    validate_regulatory_layer(jsonl_records, jsonl_ids, active_documents, warnings)
 
     facts = jsonl_ids["facts.jsonl"]
     for line_number, record in jsonl_records["decisions.jsonl"]:
@@ -1884,12 +2445,6 @@ def audit(root: Path) -> list[str]:
         ):
             if not str(record.get(field, "")).strip():
                 warnings.append(f"{location}: missing external price context {field}")
-
-    for line_number, record in jsonl_records["norm_references.jsonl"]:
-        location = f"norm_references.jsonl:{line_number}"
-        for field in ("title", "version", "territory", "checked_at", "locator", "source_url", "scope"):
-            if not str(record.get(field, "")).strip():
-                warnings.append(f"{location}: missing normative source context {field}")
 
     all_registered_ids = {project_id, *document_versions}
     for identifiers in jsonl_ids.values():

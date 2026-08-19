@@ -97,7 +97,7 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_skill_folder_matches_frontmatter_name(self) -> None:
         skill_dirs = sorted(path for path in SKILLS_ROOT.iterdir() if path.is_dir())
-        self.assertEqual(len(skill_dirs), 13)
+        self.assertEqual(len(skill_dirs), 14)
 
         for skill_dir in skill_dirs:
             skill_file = skill_dir / "SKILL.md"
@@ -109,9 +109,11 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
         contract = self.proposal_contract
-        self.assertEqual(contract["contract_version"], "1.2")
+        self.assertEqual(contract["contract_version"], "1.4")
         self.assertIn("1.0", contract["legacy_contract_versions"])
         self.assertIn("1.1", contract["legacy_contract_versions"])
+        self.assertIn("1.2", contract["legacy_contract_versions"])
+        self.assertIn("1.3", contract["legacy_contract_versions"])
         self.assertEqual(
             set(contract["check_statuses"]),
             set(self.ontology["dimensions"]["mandatory_check_status"]),
@@ -119,7 +121,11 @@ class SchemaConsistencyTests(unittest.TestCase):
         self.assertTrue(set(contract["ready_statuses"]).issubset(set(contract["check_statuses"])))
         self.assertEqual(
             set(contract["non_waivable_universal_check_ids"]),
-            {value["check_id"] for value in contract["universal_checks"]},
+            {
+                value["check_id"]
+                for value in contract["universal_checks"]
+                if value["check_id"] != "norms_and_specialist_boundary"
+            },
         )
         for section, field in (
             ("universal_checks", "check_id"),

@@ -1,0 +1,75 @@
+name: Monitor official regulatory sources
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: regulatory-source-watch
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check official sources
+        run: |
+          python plugins/home-project-control/skills/check-regulatory-compliance/scripts/check_regulatory_updates.py \
+            --state .github/regulatory-source-state.json \
+            --report regulatory-source-report.md \
+            --write-state > regulatory-source-result.json
+
+      - name: Upload monitoring report
+        uses: actions/upload-artifact@v4
+        with:
+          name: regulatory-source-report
+          path: |
+            regulatory-source-report.md
+            regulatory-source-result.json
+
+      - name: Prepare update proposal
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet -- .github/regulatory-source-state.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or refresh review pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCH_BRANCH: codex/regulatory-source-refresh
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$WATCH_BRANCH" || true
+          git checkout -B "$WATCH_BRANCH"
+          git add .github/regulatory-source-state.json
+          git commit -m "chore: refresh regulatory source fingerprints"
+          git push --force-with-lease origin "$WATCH_BRANCH"
+          if ! gh pr list --head "$WATCH_BRANCH" --state open --json number --jq 'length' | grep -q '^1$'; then
+            gh pr create \
+              --base main \
+              --head "$WATCH_BRANCH" \
+              --title "chore: проверить изменения нормативных источников" \
+              --body "Автоматический мониторинг обнаружил изменение официальной страницы. Это только сигнал для содержательной проверки: pull request не меняет применимость норм и не переписывает прошлые оценки соответствия. Отчёт доступен в artifacts запуска workflow."
+          fi
