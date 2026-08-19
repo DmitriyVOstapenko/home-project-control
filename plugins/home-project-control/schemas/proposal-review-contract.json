@@ -1,0 +1,35 @@
+{
+  "contract_version": "1.0",
+  "check_statuses": ["completed", "not_applicable", "blocked", "requires_specialist"],
+  "ready_statuses": ["completed", "not_applicable"],
+  "universal_checks": [
+    {"check_id": "source_coverage", "title": "Полное чтение точной версии и покрытие источника"},
+    {"check_id": "discipline_identification", "title": "Определение всех затронутых профессиональных направлений"},
+    {"check_id": "project_fit", "title": "Соответствие базовой линии, фактическому состоянию и ограничениям объекта"},
+    {"check_id": "bidirectional_scope", "title": "Двустороннее покрытие требований проекта и строк КП"},
+    {"check_id": "quantities_and_arithmetic", "title": "Объёмы, единицы, ставки, суммы и итоги"},
+    {"check_id": "price_and_commercial_terms", "title": "Цена, налоги, доставка, оплата, сроки, гарантия и исключения"},
+    {"check_id": "contractor_calculations", "title": "Исходные данные и расчёты подрядчика"},
+    {"check_id": "interfaces_and_compatibility", "title": "Совместимость со смежными системами, конструкциями и оборудованием"},
+    {"check_id": "missing_inputs_and_questions", "title": "Недостающие данные и вопросы подрядчику"},
+    {"check_id": "execution_and_acceptance", "title": "Монтаж, последовательность, безопасность, испытания и приёмка"},
+    {"check_id": "lifecycle_consequences", "title": "Эксплуатация, обслуживание, ремонт, простой и замена"},
+    {"check_id": "norms_and_specialist_boundary", "title": "Нормативные основания и границы обязательной профильной проверки"},
+    {"check_id": "market_and_contractor_search", "title": "Актуальные цены, поставщики и альтернативные подрядчики"},
+    {"check_id": "recommendation_and_limits", "title": "Итоговая рекомендация, ограничения и нерешённые вопросы"}
+  ],
+  "discipline_axes": [
+    {"axis_id": "inputs_and_calculations", "title": "Исходные данные и профильные расчёты"},
+    {"axis_id": "scope_and_performance", "title": "Состав и требуемые характеристики результата"},
+    {"axis_id": "interfaces_and_compatibility", "title": "Интерфейсы и совместимость"},
+    {"axis_id": "execution_and_safety", "title": "Исполнение, доступ, безопасность и стыки"},
+    {"axis_id": "acceptance_and_documentation", "title": "Испытания, приёмка и документация"},
+    {"axis_id": "operation_and_lifecycle", "title": "Эксплуатация и жизненный цикл"}
+  ],
+  "technical_alternative_tracks": [
+    {"track_id": "optimize_proposed_solution", "title": "Улучшение решения подрядчика без смены принципа"},
+    {"track_id": "same_class_alternative", "title": "Альтернативное решение того же технического класса"},
+    {"track_id": "different_technical_principle", "title": "Иной технический принцип достижения результата"},
+    {"track_id": "continue_repair_defer_or_avoid", "title": "Продолжение эксплуатации, ремонт, отсрочка или отказ от вмешательства"}
+  ]
+}
