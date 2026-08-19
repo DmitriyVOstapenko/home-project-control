@@ -143,10 +143,13 @@ def load_package(path: Path) -> dict:
     return package
 
 
-def document_index(root: Path) -> tuple[dict[str, dict], dict[str, tuple[int, str]]]:
+def document_index(
+    root: Path,
+) -> tuple[dict[str, dict], dict[str, tuple[int, str]], dict[str, set[tuple[object, str]]]]:
     registry = json.loads((root / ".home-control" / "documents.json").read_text(encoding="utf-8"))
     active: dict[str, dict] = {}
     versions: dict[str, tuple[int, str]] = {}
+    all_versions: dict[str, set[tuple[object, str]]] = {}
     for document in registry.get("items", []):
         if not isinstance(document, dict) or document.get("status") != "active":
             continue
@@ -156,7 +159,12 @@ def document_index(root: Path) -> tuple[dict[str, dict], dict[str, tuple[int, st
             current = max(history, key=lambda item: item.get("version", 0))
             active[document_id] = document
             versions[document_id] = (current.get("version"), current.get("sha256"))
-    return active, versions
+            all_versions[document_id] = {
+                (item.get("version"), str(item.get("sha256", "")).strip())
+                for item in history
+                if isinstance(item, dict)
+            }
+    return active, versions, all_versions
 
 
 def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], dict[str, dict[str, dict]]]:
@@ -192,9 +200,18 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         key: {**existing[key], **{record[REGISTRY_KEYS[key][1]]: record for record in additions[key]}}
         for key in REGISTRY_KEYS
     }
-    active_documents, current_versions = document_index(root)
+    active_documents, current_versions, all_document_versions = document_index(root)
     requirements = read_jsonl(root / ".home-control" / "approved_requirements.jsonl", "requirement_id")[1]
+    baseline_snapshots = read_jsonl(
+        root / ".home-control" / "baseline_snapshots.jsonl", "baseline_snapshot_id"
+    )[1]
     inventories = read_jsonl(root / ".home-control" / "document_inventories.jsonl", "inventory_id")[1]
+    superseded_baseline_ids = {
+        str(snapshot.get("supersedes_baseline_snapshot_id", "")).strip()
+        for snapshot in baseline_snapshots.values()
+        if str(snapshot.get("supersedes_baseline_snapshot_id", "")).strip()
+    }
+    current_baseline_ids = set(baseline_snapshots) - superseded_baseline_ids
 
     for record in additions["reading_runs"]:
         document_id = str(record.get("source_document_id", "")).strip()
@@ -236,6 +253,24 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             ):
                 raise ValueError(f"Complete ReadingRun {record['reading_run_id']} does not satisfy its current inventory")
 
+    complete_read_versions: set[tuple[str, object, str]] = set()
+    for run in known["reading_runs"].values():
+        document_id = str(run.get("source_document_id", "")).strip()
+        version = run.get("document_version")
+        sha256 = str(run.get("sha256", "")).strip()
+        inventory = next(
+            (
+                value
+                for value in inventories.values()
+                if value.get("source_document_id") == document_id
+                and value.get("document_version") == version
+                and value.get("sha256") == sha256
+            ),
+            None,
+        )
+        if inventory is not None and complete_run_matches(root, run, inventory, document_id, version, sha256):
+            complete_read_versions.add((document_id, version, sha256))
+
     contractors = known["contractors"]
     suppliers = known["suppliers"]
     for record in additions["quotes"]:
@@ -270,7 +305,7 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             if abs(quantity * unit_price - amount) > max(0.01, abs(amount) * 0.000001):
                 raise ValueError(f"QuoteItem {record['quote_item_id']} has inconsistent arithmetic")
 
-    registered_ids = set(active_documents) | set(requirements) | set(inventories)
+    registered_ids = set(active_documents) | set(requirements) | set(inventories) | set(baseline_snapshots)
     for mapping in known.values():
         registered_ids.update(mapping)
 
@@ -316,15 +351,44 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             )
             for run_id in reading_run_ids
         )
+        baseline_mode = review.get("baseline_assessment_mode")
+        if baseline_mode not in DIMENSIONS["baseline_assessment_mode"]:
+            raise ValueError(f"ProposalReview {review_id} has an unknown or missing baseline_assessment_mode")
+        baseline_snapshot_id = str(review.get("baseline_snapshot_id", "")).strip()
+        baseline_applicability_scope = str(review.get("baseline_applicability_scope", "")).strip()
+        baseline_snapshot = baseline_snapshots.get(baseline_snapshot_id)
         baseline_ids = string_list(review.get("baseline_requirement_ids", []), f"ProposalReview {review_id}.baseline_requirement_ids")
         if any(identifier not in requirements for identifier in baseline_ids):
             raise ValueError(f"ProposalReview {review_id} refers to an unknown baseline requirement")
+        if baseline_mode == "accepted_baseline":
+            if baseline_snapshot is None or baseline_snapshot_id not in current_baseline_ids:
+                raise ValueError(f"ProposalReview {review_id} must use the current BaselineSnapshot")
+            snapshot_requirement_ids = string_list(
+                baseline_snapshot.get("requirement_ids", []),
+                f"BaselineSnapshot {baseline_snapshot_id}.requirement_ids",
+                allow_empty=False,
+            )
+            if not baseline_applicability_scope:
+                raise ValueError(f"ProposalReview {review_id} requires baseline_applicability_scope")
+            if not baseline_ids or not set(baseline_ids).issubset(set(snapshot_requirement_ids)):
+                raise ValueError(
+                    f"ProposalReview {review_id} baseline requirements must be a non-empty subset of its snapshot"
+                )
+        elif baseline_snapshot_id or baseline_ids or baseline_applicability_scope:
+            raise ValueError(f"ProposalReview {review_id} reference-only mode must not claim an accepted baseline")
         matches = review.get("requirement_matches")
         if not isinstance(matches, list) or any(not isinstance(value, dict) for value in matches):
             raise ValueError(f"ProposalReview {review_id}.requirement_matches must be an array of objects")
         matched_requirements: list[str] = []
         covered_quote_items: set[str] = set()
         quote_item_ids = {identifier for identifier, item in known["quote_items"].items() if item.get("quote_id") == quote_id}
+        if baseline_mode != "accepted_baseline":
+            for item_id in quote_item_ids:
+                if string_list(
+                    known["quote_items"][item_id].get("approved_requirement_ids", []),
+                    f"QuoteItem {item_id}.approved_requirement_ids",
+                ):
+                    raise ValueError(f"ProposalReview {review_id} reference-only quote items cannot link approved requirements")
         for index, match in enumerate(matches, 1):
             requirement_id = str(match.get("requirement_id", "")).strip()
             if requirement_id not in requirements:
@@ -341,6 +405,41 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         unmatched = set(string_list(review.get("unmatched_quote_item_ids", []), f"ProposalReview {review_id}.unmatched_quote_item_ids"))
         if unmatched & covered_quote_items or covered_quote_items | unmatched != quote_item_ids:
             raise ValueError(f"ProposalReview {review_id} does not classify every quote item exactly once")
+
+        reference_comparisons = review.get("reference_comparisons", [])
+        if not isinstance(reference_comparisons, list) or any(not isinstance(value, dict) for value in reference_comparisons):
+            raise ValueError(f"ProposalReview {review_id}.reference_comparisons must be an array of objects")
+        for number, comparison in enumerate(reference_comparisons, 1):
+            document_id = str(comparison.get("document_id", "")).strip()
+            version = comparison.get("document_version")
+            sha256 = str(comparison.get("sha256", "")).strip()
+            if (version, sha256) not in all_document_versions.get(document_id, set()):
+                raise ValueError(f"ProposalReview {review_id} reference comparison {number} uses an unknown version")
+            if (document_id, version, sha256) not in complete_read_versions:
+                raise ValueError(f"ProposalReview {review_id} reference comparison {number} is not fully read")
+            if document_id == review.get("source_document_id"):
+                raise ValueError(f"ProposalReview {review_id} cannot use its proposal as a reference document")
+            for field in ("project_role", "applicability_scope", "statement", "locator", "limitations"):
+                if not str(comparison.get(field, "")).strip():
+                    raise ValueError(f"ProposalReview {review_id} reference comparison {number} requires {field}")
+            if comparison.get("status") not in DIMENSIONS["proposal_match_status"]:
+                raise ValueError(f"ProposalReview {review_id} reference comparison {number} has an unknown status")
+            linked_items = string_list(
+                comparison.get("quote_item_ids", []),
+                f"ProposalReview {review_id} reference comparison {number}.quote_item_ids",
+            )
+            if any(identifier not in quote_item_ids for identifier in linked_items):
+                raise ValueError(f"ProposalReview {review_id} reference comparison {number} links another quote")
+        baseline_limitations = string_list(
+            review.get("baseline_limitations", []),
+            f"ProposalReview {review_id}.baseline_limitations",
+        )
+        if baseline_mode == "reference_only" and not reference_comparisons:
+            raise ValueError(f"ProposalReview {review_id} reference_only mode requires reference comparisons")
+        if baseline_mode == "no_relevant_documents" and reference_comparisons:
+            raise ValueError(f"ProposalReview {review_id} no_relevant_documents mode cannot have reference comparisons")
+        if baseline_mode != "accepted_baseline" and not baseline_limitations:
+            raise ValueError(f"ProposalReview {review_id} without an accepted baseline must state dependent limitations")
 
         checks = review.get("technical_checks")
         if not isinstance(checks, list) or not checks or any(not isinstance(value, dict) for value in checks):
@@ -498,7 +597,7 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
                 inventory.get("status") != "complete"
                 or not matching_complete_run
                 or blockers
-                or not baseline_ids
+                or (baseline_mode == "accepted_baseline" and not baseline_ids)
                 or not quote_item_ids
             ):
                 raise ValueError(f"ProposalReview {review_id} cannot be ready while coverage or blockers are incomplete")

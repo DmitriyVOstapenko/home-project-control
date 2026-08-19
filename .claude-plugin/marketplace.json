@@ -1,0 +1,18 @@
+{
+  "name": "home-project-control-marketplace",
+  "owner": {
+    "name": "Dmitriy",
+    "url": "https://github.com/DmitriyVOstapenko"
+  },
+  "description": "Плагины доказательного управления строительством, ремонтом и эксплуатацией физических объектов.",
+  "plugins": [
+    {
+      "name": "home-project-control",
+      "source": "./plugins/home-project-control",
+      "displayName": "Контроль дома",
+      "description": "Локальная доказательная база и контроль проектов, КП, работ, расходов и оборудования.",
+      "category": "productivity",
+      "tags": ["construction", "property", "contractors", "equipment", "evidence"]
+    }
+  ]
+}

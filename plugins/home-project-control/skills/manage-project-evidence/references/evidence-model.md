@@ -15,7 +15,7 @@
 ## Обязательные поля атомарного утверждения
 
 ```json
-{"fact_id":"F-0001","statement":"...","statement_kind":"source_fact","evidence_origin":"approved_project_document","verification_status":"verified","source_document_id":"...","document_version":1,"locator":"PDF, стр. 4, п. 2.1","recorded_at":"2026-08-18","notes":""}
+{"fact_id":"F-0001","statement":"...","statement_kind":"source_fact","evidence_origin":"approved_project_document","verification_status":"verified","source_document_id":"...","document_version":1,"sha256":"...","locator":"PDF, стр. 4, п. 2.1","recorded_at":"2026-08-18","notes":""}
 ```
 
 Одна строка содержит одно проверяемое утверждение. Поля `statement_kind`, `evidence_origin` и `verification_status` независимы. Для прямого подтверждения владельца вместо документа указываются дата, задача или иной доступный локатор разговора.
@@ -32,11 +32,17 @@
 
 ## Утверждённое требование
 
+До записи требований владелец принимает точный набор версий отдельным `OwnerDecision`. Снимок не подменяет техническое или официальное утверждение:
+
 ```json
-{"requirement_id":"AR-0001","statement":"...","scope":"...","baseline_status":"approved","mandatory_parameters":{},"source_fact_ids":["F-0001"],"decision_id":"D-0001","verification_status":"verified","notes":""}
+{"baseline_snapshot_id":"BL-0001","baseline_version":1,"scope":"Проект дома","owner_decision_id":"D-0001","accepted_at":"2026-08-19","supersedes_baseline_snapshot_id":null,"document_versions":[{"document_id":"DOC-0001","document_version":2,"sha256":"...","project_role":"рабочий проект","applicability_scope":"вентиляция дома","technical_approval_status":"confirmed","official_approval_status":"unknown","requirement_ids":["AR-0001"]}],"owner_requirement_ids":[],"requirement_ids":["AR-0001"],"conflict_resolutions":[]}
 ```
 
-`baseline_status` допустим только при доказанном основании. Предложение подрядчика не является таким основанием.
+```json
+{"requirement_id":"AR-0001","statement":"...","scope":"...","baseline_status":"approved","mandatory_parameters":{},"source_fact_ids":["F-0001"],"decision_id":"D-0001","baseline_snapshot_id":"BL-0001","verification_status":"verified","notes":""}
+```
+
+`baseline_status` допустим только при доказанном основании. Одна запись содержит одно проверяемое требование, а `source_fact_ids` ведут к точным локаторам. Предложение подрядчика не является таким основанием и никогда не входит в `document_versions` снимка.
 
 ## Предложение и его строки
 
@@ -50,7 +56,7 @@
 
 Строка сохраняет исходный текст. Неоднозначное количество, единицу или цену оставлять неизвестными, а не восстанавливать догадкой.
 
-Центральный `ProposalReview` хранит применённые профессиональные направления, ссылку на инвентаризацию и полные `ReadingRun`, двустороннюю матрицу требований и строк КП, технические проверки, воспроизводимые расчёты, внешний поиск, существенные блокеры и вопросы подрядчику. Одно КП может охватывать несколько направлений.
+Центральный `ProposalReview` хранит применённые профессиональные направления, ссылку на инвентаризацию и полные `ReadingRun`, режим базового контекста, технические проверки, воспроизводимые расчёты, внешний поиск, существенные блокеры и вопросы подрядчику. В `accepted_baseline` он указывает снимок, точную область его применения и покрывает выбранное непустое подмножество применимых требований. В `reference_only` сопоставления с полностью прочитанными документами хранятся отдельно и не выдаются за соответствие принятой базе. Одно КП может охватывать несколько направлений.
 
 ## Внешняя цена, норма и альтернатива
 

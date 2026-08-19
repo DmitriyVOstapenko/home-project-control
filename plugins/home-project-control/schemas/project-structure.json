@@ -1,21 +1,27 @@
 {
   "plugin_id": "home-project-control",
-  "structure_version": "4.0",
+  "structure_version": "5.0",
   "supported_migrations": {
     "1.0": {
-      "to": "4.0",
+      "to": "5.0",
       "mode": "additive",
       "documents_schema_from": "1.0",
       "documents_schema_to": "2.0"
     },
     "2.0": {
-      "to": "4.0",
+      "to": "5.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
     },
     "3.0": {
-      "to": "4.0",
+      "to": "5.0",
+      "mode": "additive",
+      "documents_schema_from": "2.0",
+      "documents_schema_to": "2.0"
+    },
+    "4.0": {
+      "to": "5.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
@@ -61,6 +67,7 @@
     ".home-control/reading_runs.jsonl": {"entity": "ReadingRun", "id_field": "reading_run_id", "append_only": true, "introduced_in": "2.0"},
     ".home-control/document_inventories.jsonl": {"entity": "DocumentInventory", "id_field": "inventory_id", "append_only": true, "introduced_in": "4.0"},
     ".home-control/approved_requirements.jsonl": {"entity": "ApprovedRequirement", "id_field": "requirement_id", "append_only": true, "introduced_in": "2.0"},
+    ".home-control/baseline_snapshots.jsonl": {"entity": "BaselineSnapshot", "id_field": "baseline_snapshot_id", "append_only": true, "introduced_in": "5.0"},
     ".home-control/sites.jsonl": {"entity": "Site", "id_field": "site_id", "append_only": true, "introduced_in": "3.0"},
     ".home-control/zones.jsonl": {"entity": "Zone", "id_field": "zone_id", "append_only": true, "introduced_in": "3.0"},
     ".home-control/physical_elements.jsonl": {"entity": "PhysicalElement", "id_field": "element_id", "append_only": true, "introduced_in": "3.0"},

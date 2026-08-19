@@ -19,6 +19,7 @@ INDEX = SCRIPT_ROOT / "index_documents.py"
 INGEST = SCRIPT_ROOT / "ingest_documents.py"
 AUDIT = SCRIPT_ROOT / "audit_project.py"
 INVENTORY = SCRIPT_ROOT / "inventory_document.py"
+RECORD_BASELINE = SCRIPT_ROOT / "record_baseline_snapshot.py"
 PROPOSAL_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "review-contractor-proposal" / "scripts"
 RECORD_PROPOSAL = PROPOSAL_SCRIPT_ROOT / "record_proposal_review.py"
 BUILD_DOSSIER = PROPOSAL_SCRIPT_ROOT / "build_proposal_dossier.py"
@@ -331,6 +332,7 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue((project / ".home-control" / "summaries").is_dir())
             self.assertTrue((project / ".home-control" / "reading_runs.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "approved_requirements.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "baseline_snapshots.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "quote_items.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "sites.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "assets.jsonl").is_file())
@@ -363,8 +365,8 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(audited.returncode, 1, audited.stderr)
             self.assertIn("duplicate document_id duplicate-document", audited.stdout)
 
-    def test_real_v1_v2_and_v3_projects_migrate_without_losing_existing_data(self) -> None:
-        for version in ("1.0", "2.0", "3.0"):
+    def test_real_v1_v2_v3_and_v4_projects_migrate_without_losing_existing_data(self) -> None:
+        for version in ("1.0", "2.0", "3.0", "4.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 create_legacy_project(project, version)
@@ -380,7 +382,12 @@ class ProjectToolsTest(unittest.TestCase):
                 self.assertEqual(preview.returncode, 0, preview.stderr)
                 self.assertEqual(file_snapshot(project), before)
                 self.assertIn("create_jsonl", preview.stdout)
-                expected_added_registry = "assets.jsonl" if version in {"1.0", "2.0"} else "proposal_reviews.jsonl"
+                expected_added_registry = {
+                    "1.0": "assets.jsonl",
+                    "2.0": "assets.jsonl",
+                    "3.0": "proposal_reviews.jsonl",
+                    "4.0": "baseline_snapshots.jsonl",
+                }[version]
                 self.assertIn(expected_added_registry, preview.stdout)
                 self.assertIn("update_project_marker_version", preview.stdout)
                 if version == "1.0":
@@ -435,7 +442,7 @@ class ProjectToolsTest(unittest.TestCase):
         self.assertIn("inside the plugin distribution", refused.stderr)
 
     def test_unknown_older_and_newer_versions_are_blocked(self) -> None:
-        for version, expected in (("1.5", "No supported migration"), ("5.0", "Refusing to downgrade")):
+        for version, expected in (("1.5", "No supported migration"), ("6.0", "Refusing to downgrade")):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 self.assertEqual(run_script(INIT, project).returncode, 0)
@@ -1315,13 +1322,38 @@ class ProjectToolsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary) / "project"
             self.assertEqual(run_script(INIT, project).returncode, 0)
-            relative = Path("03_Коммерческие_предложения") / "mixed-offer.txt"
-            (project / relative).write_text("Светильники 2 шт по 1000 руб.\nМонтаж включён.\n", encoding="utf-8")
+            baseline_relative = Path("02_Проекты_и_технические_решения") / "lighting-requirements.txt"
+            proposal_relative = Path("03_Коммерческие_предложения") / "mixed-offer.txt"
+            (project / baseline_relative).write_text(
+                "В тестовой зоне установить два светильника с монтажом.\n",
+                encoding="utf-8",
+            )
+            (project / proposal_relative).write_text(
+                "Светильники 2 шт по 1000 руб.\nМонтаж включён.\n",
+                encoding="utf-8",
+            )
             self.assertEqual(run_script(INDEX, project).returncode, 0)
-            self.assertEqual(run_script(INVENTORY, project, relative.as_posix(), "--apply").returncode, 0)
+            self.assertEqual(run_script(INVENTORY, project, baseline_relative.as_posix(), "--apply").returncode, 0)
+            self.assertEqual(run_script(INVENTORY, project, proposal_relative.as_posix(), "--apply").returncode, 0)
             control = project / ".home-control"
-            document = json.loads((control / "documents.json").read_text(encoding="utf-8"))["items"][0]
-            inventory = json.loads((control / "document_inventories.jsonl").read_text(encoding="utf-8"))
+            documents = json.loads((control / "documents.json").read_text(encoding="utf-8"))["items"]
+            baseline_document = next(
+                value for value in documents if value["relative_path"] == baseline_relative.as_posix()
+            )
+            document = next(
+                value for value in documents if value["relative_path"] == proposal_relative.as_posix()
+            )
+            inventories = [
+                json.loads(line)
+                for line in (control / "document_inventories.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            baseline_inventory = next(
+                value for value in inventories if value["source_document_id"] == baseline_document["document_id"]
+            )
+            inventory = next(value for value in inventories if value["source_document_id"] == document["document_id"])
+            baseline_summary = control / "summaries" / "lighting-requirements-v1.md"
+            baseline_summary.write_text("# Полный конспект требований\n", encoding="utf-8")
             summary = control / "summaries" / "mixed-offer-v1.md"
             summary.write_text("# Полный конспект КП\n", encoding="utf-8")
             fact = {
@@ -1330,9 +1362,10 @@ class ProjectToolsTest(unittest.TestCase):
                 "statement_kind": "source_fact",
                 "evidence_origin": "approved_project_document",
                 "verification_status": "verified",
-                "source_document_id": document["document_id"],
+                "source_document_id": baseline_document["document_id"],
                 "document_version": 1,
-                "locator": "подтверждённое требование теста",
+                "sha256": baseline_document["sha256"],
+                "locator": "строка 1, полное предложение",
             }
             requirement = {
                 "requirement_id": "AR-1",
@@ -1342,9 +1375,118 @@ class ProjectToolsTest(unittest.TestCase):
                 "mandatory_parameters": {"quantity": 2},
                 "source_fact_ids": ["F-REQ-1"],
                 "verification_status": "verified",
+                "decision_id": "D-BASE-1",
+                "baseline_snapshot_id": "BL-1",
             }
-            write_jsonl(control / "facts.jsonl", fact)
-            write_jsonl(control / "approved_requirements.jsonl", requirement)
+            owner_fact = {
+                "fact_id": "F-OWNER-2",
+                "statement": "Отдельное требование владельца относится к другой зоне и не применяется к этому КП.",
+                "statement_kind": "source_fact",
+                "evidence_origin": "owner_confirmation",
+                "verification_status": "verified",
+                "locator": "решение владельца от 2026-08-19, пункт 2",
+            }
+            unrelated_requirement = {
+                "requirement_id": "AR-2",
+                "statement": "Сохранить существующее освещение в другой зоне.",
+                "scope": "другая зона",
+                "baseline_status": "approved",
+                "mandatory_parameters": {},
+                "source_fact_ids": ["F-OWNER-2"],
+                "verification_status": "verified",
+                "decision_id": "D-BASE-1",
+                "baseline_snapshot_id": "BL-1",
+            }
+            baseline_run = {
+                "reading_run_id": "RR-BASE-1",
+                "source_document_id": baseline_document["document_id"],
+                "document_version": 1,
+                "sha256": baseline_document["sha256"],
+                "status": "complete",
+                "coverage": {
+                    "expected_units": baseline_inventory["expected_units"],
+                    "checked_units": baseline_inventory["expected_units"],
+                    "gaps": [],
+                    "checked_requirements": baseline_inventory["reading_requirements"],
+                },
+                "summary_path": ".home-control/summaries/lighting-requirements-v1.md",
+            }
+            write_jsonl(control / "reading_runs.jsonl", baseline_run)
+            baseline_package = {
+                "schema_version": "1.0",
+                "facts": [fact, owner_fact],
+                "decisions": [{
+                    "decision_id": "D-BASE-1",
+                    "decision_type": "baseline_acceptance",
+                    "status": "approved",
+                    "approved_by": "owner",
+                    "approved_at": "2026-08-19T12:00:00+03:00",
+                    "decision": "Принять версию 1 документа требований как базу анализа КП.",
+                    "source_fact_ids": ["F-REQ-1", "F-OWNER-2"],
+                }],
+                "approved_requirements": [requirement, unrelated_requirement],
+                "baseline_snapshots": [{
+                    "baseline_snapshot_id": "BL-1",
+                    "baseline_version": 1,
+                    "scope": "тестовая зона, освещение",
+                    "accepted_at": "2026-08-19T12:00:00+03:00",
+                    "owner_decision_id": "D-BASE-1",
+                    "supersedes_baseline_snapshot_id": "",
+                    "requirement_ids": ["AR-1", "AR-2"],
+                    "owner_requirement_ids": ["AR-2"],
+                    "document_versions": [{
+                        "document_id": baseline_document["document_id"],
+                        "document_version": 1,
+                        "sha256": baseline_document["sha256"],
+                        "project_role": "требования к освещению",
+                        "applicability_scope": "тестовая зона",
+                        "technical_approval_status": "unknown",
+                        "official_approval_status": "unknown",
+                        "requirement_ids": ["AR-1"],
+                    }],
+                    "conflict_resolutions": [],
+                }],
+            }
+            baseline_package_path = project / "baseline-package.json"
+            baseline_package_path.write_text(
+                json.dumps(baseline_package, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            proposal_as_baseline = json.loads(json.dumps(baseline_package))
+            proposal_as_baseline["facts"][0].update({
+                "source_document_id": document["document_id"],
+                "sha256": document["sha256"],
+                "locator": "строка 1 КП",
+            })
+            proposal_as_baseline["baseline_snapshots"][0]["document_versions"][0].update({
+                "document_id": document["document_id"],
+                "sha256": document["sha256"],
+                "project_role": "коммерческое предложение",
+            })
+            proposal_baseline_path = project / "proposal-as-baseline.json"
+            proposal_baseline_path.write_text(
+                json.dumps(proposal_as_baseline, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            rejected_proposal_baseline = run_script(RECORD_BASELINE, project, proposal_baseline_path)
+            self.assertEqual(rejected_proposal_baseline.returncode, 2)
+            self.assertIn("quote source cannot be part of the baseline", rejected_proposal_baseline.stderr)
+
+            non_owner_baseline = json.loads(json.dumps(baseline_package))
+            non_owner_baseline["decisions"][0]["approved_by"] = "technical_reviewer"
+            non_owner_path = project / "non-owner-baseline.json"
+            non_owner_path.write_text(
+                json.dumps(non_owner_baseline, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            rejected_non_owner = run_script(RECORD_BASELINE, project, non_owner_path)
+            self.assertEqual(rejected_non_owner.returncode, 2)
+            self.assertIn("explicitly approved by the owner", rejected_non_owner.stderr)
+
+            baseline_preview = run_script(RECORD_BASELINE, project, baseline_package_path)
+            self.assertEqual(baseline_preview.returncode, 0, baseline_preview.stderr)
+            baseline_applied = run_script(RECORD_BASELINE, project, baseline_package_path, "--apply")
+            self.assertEqual(baseline_applied.returncode, 0, baseline_applied.stderr)
             package = {
                 "schema_version": "1.0",
                 "reading_runs": [{
@@ -1402,8 +1544,13 @@ class ProjectToolsTest(unittest.TestCase):
                     "document_version": 1, "sha256": document["sha256"], "quote_id": "Q-1",
                     "status": "ready_for_owner", "disciplines": ["electrical", "equipment_supply"],
                     "inventory_id": inventory["inventory_id"], "reading_run_ids": ["RR-OFFER-1"],
+                    "baseline_assessment_mode": "accepted_baseline",
+                    "baseline_snapshot_id": "BL-1",
+                    "baseline_applicability_scope": "тестовая зона, поставка и монтаж освещения",
                     "baseline_requirement_ids": ["AR-1"],
                     "requirement_matches": [{"requirement_id": "AR-1", "status": "exact", "quote_item_ids": ["QI-1"]}],
+                    "reference_comparisons": [],
+                    "baseline_limitations": [],
                     "unmatched_quote_item_ids": [],
                     "technical_checks": [{
                         "check_id": "TC-1", "category": "scope", "criterion": "Поставка и монтаж включены",
@@ -1448,6 +1595,103 @@ class ProjectToolsTest(unittest.TestCase):
                     ),
                 }],
             }
+            reference_project = Path(temporary) / "reference-project"
+            self.assertEqual(run_script(INIT, reference_project).returncode, 0)
+            (reference_project / baseline_relative).write_text(
+                "В тестовой зоне установить два светильника с монтажом.\n",
+                encoding="utf-8",
+            )
+            (reference_project / proposal_relative).write_text(
+                "Светильники 2 шт по 1000 руб.\nМонтаж включён.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(run_script(INDEX, reference_project).returncode, 0)
+            self.assertEqual(
+                run_script(INVENTORY, reference_project, baseline_relative.as_posix(), "--apply").returncode,
+                0,
+            )
+            self.assertEqual(
+                run_script(INVENTORY, reference_project, proposal_relative.as_posix(), "--apply").returncode,
+                0,
+            )
+            reference_control = reference_project / ".home-control"
+            (reference_control / "summaries" / "lighting-requirements-v1.md").write_text(
+                "# Полный справочный конспект требований\n",
+                encoding="utf-8",
+            )
+            (reference_control / "summaries" / "mixed-offer-v1.md").write_text(
+                "# Полный конспект КП\n",
+                encoding="utf-8",
+            )
+            write_jsonl(reference_control / "reading_runs.jsonl", baseline_run)
+
+            reference_package = json.loads(json.dumps(package))
+
+            def remove_baseline_identifier(value: object) -> None:
+                if isinstance(value, dict):
+                    for nested in value.values():
+                        remove_baseline_identifier(nested)
+                elif isinstance(value, list):
+                    value[:] = [nested for nested in value if nested != "AR-1"]
+                    for nested in value:
+                        remove_baseline_identifier(nested)
+
+            remove_baseline_identifier(reference_package)
+            reference_review = reference_package["proposal_reviews"][0]
+            reference_review.update({
+                "proposal_review_id": "PR-REF-1",
+                "baseline_assessment_mode": "reference_only",
+                "baseline_snapshot_id": "",
+                "baseline_applicability_scope": "",
+                "baseline_requirement_ids": [],
+                "requirement_matches": [],
+                "unmatched_quote_item_ids": ["QI-1"],
+                "reference_comparisons": [{
+                    "document_id": baseline_document["document_id"],
+                    "document_version": 1,
+                    "sha256": baseline_document["sha256"],
+                    "project_role": "справочные требования к освещению",
+                    "applicability_scope": "тестовая зона",
+                    "statement": "КП справочно совпадает с требованием о двух светильниках и монтаже.",
+                    "locator": "строка 1, полное предложение",
+                    "limitations": "Документ не принят владельцем как применяемая базовая линия.",
+                    "status": "exact",
+                    "quote_item_ids": ["QI-1"],
+                }],
+                "baseline_limitations": [
+                    "Соответствие принятой базе не оценено до отдельного решения владельца."
+                ],
+            })
+            reference_review["foreman_assessment"]["decision_readiness"] = "ready_for_negotiation"
+            for assessment in reference_review["technical_alternative_assessments"]:
+                assessment["project_fit"] = "Сопоставлено только справочно; принятая база отсутствует."
+            reference_package_path = reference_project / "reference-only-package.json"
+            reference_package_path.write_text(
+                json.dumps(reference_package, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            reference_preview = run_script(RECORD_PROPOSAL, reference_project, reference_package_path)
+            self.assertEqual(reference_preview.returncode, 0, reference_preview.stderr)
+            invalid_reference = json.loads(json.dumps(reference_package))
+            invalid_reference["proposal_reviews"][0]["foreman_assessment"]["decision_readiness"] = "ready_for_contract"
+            invalid_reference_path = reference_project / "invalid-reference-only-package.json"
+            invalid_reference_path.write_text(
+                json.dumps(invalid_reference, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            rejected_reference = run_script(RECORD_PROPOSAL, reference_project, invalid_reference_path)
+            self.assertEqual(rejected_reference.returncode, 2)
+            self.assertIn("ready_for_contract requires an accepted baseline", rejected_reference.stderr)
+            reference_applied = run_script(RECORD_PROPOSAL, reference_project, reference_package_path, "--apply")
+            self.assertEqual(reference_applied.returncode, 0, reference_applied.stderr)
+            self.assertEqual(run_script(AUDIT, reference_project).returncode, 0)
+            self.assertEqual(run_script(BUILD_DOSSIER, reference_project, "PR-REF-1", "--apply").returncode, 0)
+            reference_dossier = (
+                reference_control / "reports" / "proposals" / "PR-REF-1" / "full-dossier.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("### Справочные сопоставления", reference_dossier)
+            self.assertIn("Не оценивалось: применяемая базовая линия не принята", reference_dossier)
+
             package_path = project / "proposal-package.json"
             package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1461,7 +1705,7 @@ class ProjectToolsTest(unittest.TestCase):
             rejected_bad_run = run_script(RECORD_PROPOSAL, project, bad_run_path)
             self.assertEqual(rejected_bad_run.returncode, 2)
             self.assertIn("coverage or blockers", rejected_bad_run.stderr)
-            write_jsonl(control / "reading_runs.jsonl")
+            write_jsonl(control / "reading_runs.jsonl", baseline_run)
 
             invalid = json.loads(json.dumps(package))
             invalid["proposal_reviews"][0]["requirement_matches"] = []
@@ -1618,6 +1862,47 @@ class ProjectToolsTest(unittest.TestCase):
             escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")
             self.assertEqual(escaped.returncode, 2)
             self.assertFalse((control / "reports" / "escape").exists())
+
+            baseline_v2 = json.loads(json.dumps(baseline_package))
+            replacements = {
+                "BL-1": "BL-2",
+                "D-BASE-1": "D-BASE-2",
+                "F-REQ-1": "F-REQ-2",
+                "F-OWNER-2": "F-OWNER-3",
+                "AR-1": "AR-3",
+                "AR-2": "AR-4",
+            }
+
+            def replace_identifiers(value: object) -> object:
+                if isinstance(value, dict):
+                    return {key: replace_identifiers(nested) for key, nested in value.items()}
+                if isinstance(value, list):
+                    return [replace_identifiers(nested) for nested in value]
+                if isinstance(value, str):
+                    return replacements.get(value, value)
+                return value
+
+            baseline_v2 = replace_identifiers(baseline_v2)
+            baseline_v2["decisions"][0].update({
+                "approved_at": "2026-08-20T12:00:00+03:00",
+                "decision": "Принять вторую версию базовой линии без изменения исходного документа.",
+            })
+            baseline_v2["baseline_snapshots"][0].update({
+                "baseline_version": 2,
+                "accepted_at": "2026-08-20T12:00:00+03:00",
+                "supersedes_baseline_snapshot_id": "BL-1",
+            })
+            baseline_v2_path = project / "baseline-v2-package.json"
+            baseline_v2_path.write_text(
+                json.dumps(baseline_v2, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            baseline_v2_preview = run_script(RECORD_BASELINE, project, baseline_v2_path)
+            self.assertEqual(baseline_v2_preview.returncode, 0, baseline_v2_preview.stderr)
+            baseline_v2_applied = run_script(RECORD_BASELINE, project, baseline_v2_path, "--apply")
+            self.assertEqual(baseline_v2_applied.returncode, 0, baseline_v2_applied.stderr)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+            self.assertIn("`BL-1`", (target / "full-dossier.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

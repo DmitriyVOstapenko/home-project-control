@@ -610,6 +610,8 @@ def validate_review_contract(
         if readiness == "preliminary":
             errors.append("ready review cannot have preliminary decision_readiness")
         if readiness == "ready_for_contract":
+            if review.get("baseline_assessment_mode") != "accepted_baseline":
+                errors.append("ready_for_contract requires an accepted baseline snapshot")
             if foreman.get("verdict") != "conditionally_recommended":
                 errors.append("ready_for_contract requires a conditionally_recommended foreman verdict")
             if cost_contract_blocked:
@@ -643,18 +645,180 @@ def normalized_unit_set(value: object) -> set[str] | None:
     return set(normalized)
 
 
+def validate_baseline_snapshots(
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    document_versions: dict[str, set[tuple[object, str]]],
+    complete_read_versions: set[tuple[str, object, str]],
+    proposal_document_ids: set[str],
+    warnings: list[str],
+) -> set[str]:
+    snapshots = records_by_id(jsonl_records["baseline_snapshots.jsonl"], "baseline_snapshot_id")
+    requirements = records_by_id(jsonl_records["approved_requirements.jsonl"], "requirement_id")
+    facts = records_by_id(jsonl_records["facts.jsonl"], "fact_id")
+    decisions = records_by_id(jsonl_records["decisions.jsonl"], "decision_id")
+    quote_source_ids = proposal_document_ids | {
+        str(record.get("source_document_id", "")).strip()
+        for _, record in jsonl_records["quotes.jsonl"]
+        if str(record.get("source_document_id", "")).strip()
+    }
+    seen_versions: dict[int, str] = {}
+    superseded_ids: set[str] = set()
+
+    for line_number, snapshot in jsonl_records["baseline_snapshots.jsonl"]:
+        location = f"baseline_snapshots.jsonl:{line_number}"
+        snapshot_id = str(snapshot.get("baseline_snapshot_id", "")).strip()
+        baseline_version = snapshot.get("baseline_version")
+        if not isinstance(baseline_version, int) or isinstance(baseline_version, bool) or baseline_version < 1:
+            warnings.append(f"{location}: baseline_version must be a positive integer")
+        elif baseline_version in seen_versions:
+            warnings.append(f"{location}: duplicate baseline_version {baseline_version}")
+        else:
+            seen_versions[baseline_version] = snapshot_id
+        if not str(snapshot.get("scope", "")).strip():
+            warnings.append(f"{location}: scope is required")
+        if not str(snapshot.get("accepted_at", "")).strip():
+            warnings.append(f"{location}: accepted_at is required")
+
+        decision_id = str(snapshot.get("owner_decision_id", "")).strip()
+        decision = decisions.get(decision_id)
+        if (
+            decision is None
+            or decision.get("decision_type") != "baseline_acceptance"
+            or decision.get("status") != "approved"
+            or decision.get("approved_by") != "owner"
+            or not str(decision.get("approved_at", "")).strip()
+        ):
+            warnings.append(f"{location}: no explicit approved owner baseline decision")
+        elif snapshot.get("accepted_at") != decision.get("approved_at"):
+            warnings.append(f"{location}: accepted_at must match the owner decision approved_at")
+
+        supersedes = str(snapshot.get("supersedes_baseline_snapshot_id", "")).strip()
+        if isinstance(baseline_version, int) and baseline_version == 1 and supersedes:
+            warnings.append(f"{location}: baseline version 1 must not supersede another snapshot")
+        if isinstance(baseline_version, int) and baseline_version > 1:
+            prior = snapshots.get(supersedes)
+            if prior is None or prior.get("baseline_version") != baseline_version - 1:
+                warnings.append(f"{location}: versioned baseline must supersede the immediately preceding snapshot")
+            else:
+                superseded_ids.add(supersedes)
+
+        snapshot_requirement_ids = id_list(snapshot, "requirement_ids", location, warnings)
+        if not snapshot_requirement_ids:
+            warnings.append(f"{location}: requirement_ids must not be empty")
+        if len(snapshot_requirement_ids) != len(set(snapshot_requirement_ids)):
+            warnings.append(f"{location}: requirement_ids contains duplicates")
+        if any(value not in requirements for value in snapshot_requirement_ids):
+            warnings.append(f"{location}: unknown requirement_id")
+
+        owner_requirement_ids = id_list(snapshot, "owner_requirement_ids", location, warnings)
+        document_entries = snapshot.get("document_versions")
+        if not isinstance(document_entries, list) or not document_entries or any(
+            not isinstance(value, dict) for value in document_entries
+        ):
+            warnings.append(f"{location}: document_versions must be a non-empty array of objects")
+            document_entries = []
+        contributed_requirement_ids: list[str] = []
+        seen_document_versions: set[tuple[str, object, str]] = set()
+        for number, entry in enumerate(document_entries, 1):
+            entry_location = f"{location}:document {number}"
+            document_id = str(entry.get("document_id", "")).strip()
+            version = entry.get("document_version")
+            sha256 = str(entry.get("sha256", "")).strip()
+            version_key = (document_id, version, sha256)
+            if not document_id or not isinstance(version, int) or isinstance(version, bool) or not sha256:
+                warnings.append(f"{entry_location}: exact document identity is required")
+            elif (version, sha256) not in document_versions.get(document_id, set()):
+                warnings.append(f"{entry_location}: document version and SHA-256 are not indexed")
+            elif version_key not in complete_read_versions:
+                warnings.append(f"{entry_location}: selected document version has no complete ReadingRun")
+            if version_key in seen_document_versions:
+                warnings.append(f"{entry_location}: duplicate selected document version")
+            seen_document_versions.add(version_key)
+            if document_id in quote_source_ids:
+                warnings.append(f"{entry_location}: a quote source cannot be part of the baseline")
+            for field in ("project_role", "applicability_scope"):
+                if not str(entry.get(field, "")).strip():
+                    warnings.append(f"{entry_location}: {field} is required")
+            for field in ("technical_approval_status", "official_approval_status"):
+                if entry.get(field) not in DIMENSIONS["document_approval_status"]:
+                    warnings.append(f"{entry_location}: unknown {field}")
+            entry_requirement_ids = id_list(entry, "requirement_ids", entry_location, warnings)
+            if not entry_requirement_ids:
+                warnings.append(f"{entry_location}: selected document contributes no project requirement")
+            contributed_requirement_ids.extend(entry_requirement_ids)
+            for requirement_id in entry_requirement_ids:
+                requirement = requirements.get(requirement_id)
+                if requirement is None:
+                    continue
+                matching_fact = False
+                for fact_id in id_list(requirement, "source_fact_ids", entry_location, warnings):
+                    fact = facts.get(fact_id)
+                    if (
+                        fact is not None
+                        and fact.get("source_document_id") == document_id
+                        and fact.get("document_version") == version
+                        and str(fact.get("sha256", "")).strip() == sha256
+                        and str(fact.get("locator", "")).strip()
+                    ):
+                        matching_fact = True
+                if not matching_fact:
+                    warnings.append(f"{entry_location}: requirement {requirement_id} has no precise locator in this document version")
+
+        expected_membership = set(contributed_requirement_ids) | set(owner_requirement_ids)
+        if expected_membership != set(snapshot_requirement_ids):
+            warnings.append(f"{location}: snapshot requirement_ids do not match document and owner requirement membership")
+
+        conflicts = snapshot.get("conflict_resolutions", [])
+        if not isinstance(conflicts, list) or any(not isinstance(value, dict) for value in conflicts):
+            warnings.append(f"{location}: conflict_resolutions must be an array of objects")
+        else:
+            seen_conflicts: set[str] = set()
+            for number, conflict in enumerate(conflicts, 1):
+                conflict_id = str(conflict.get("conflict_id", "")).strip()
+                if not conflict_id or conflict_id in seen_conflicts:
+                    warnings.append(f"{location}: conflict {number} has a missing or duplicate conflict_id")
+                seen_conflicts.add(conflict_id)
+                if not str(conflict.get("statement", "")).strip() or not str(conflict.get("resolution", "")).strip():
+                    warnings.append(f"{location}: conflict {number} requires statement and owner-accepted resolution")
+                source_fact_ids = id_list(conflict, "source_fact_ids", f"{location}:conflict {number}", warnings)
+                if not source_fact_ids or any(value not in facts for value in source_fact_ids):
+                    warnings.append(f"{location}: conflict {number} has missing or unknown source facts")
+
+        for requirement_id in snapshot_requirement_ids:
+            requirement = requirements.get(requirement_id)
+            if requirement is None:
+                continue
+            if requirement.get("baseline_snapshot_id") != snapshot_id:
+                warnings.append(f"{location}: requirement {requirement_id} is not linked back to this snapshot")
+            if requirement.get("decision_id") != decision_id:
+                warnings.append(f"{location}: requirement {requirement_id} is not linked to the baseline owner decision")
+            if requirement.get("baseline_status") != "approved":
+                warnings.append(f"{location}: requirement {requirement_id} is not owner-approved")
+            if requirement.get("verification_status") != "verified":
+                warnings.append(f"{location}: requirement {requirement_id} is not verified")
+
+    current_ids = set(snapshots) - superseded_ids
+    if len(current_ids) > 1:
+        warnings.append("baseline_snapshots.jsonl: more than one current baseline snapshot")
+    return current_ids
+
+
 def validate_proposal_reviews(
     root: Path,
     jsonl_records: dict[str, list[tuple[int, dict]]],
     jsonl_ids: dict[str, set[str]],
     active_documents: set[str],
     current_versions: dict[str, tuple[object, str]],
+    document_versions: dict[str, set[tuple[object, str]]],
+    complete_read_versions: set[tuple[str, object, str]],
     warnings: list[str],
 ) -> None:
     inventories = records_by_id(jsonl_records["document_inventories.jsonl"], "inventory_id")
     reading_runs = records_by_id(jsonl_records["reading_runs.jsonl"], "reading_run_id")
     quotes = records_by_id(jsonl_records["quotes.jsonl"], "quote_id")
     quote_items = records_by_id(jsonl_records["quote_items.jsonl"], "quote_item_id")
+    baseline_snapshots = records_by_id(jsonl_records["baseline_snapshots.jsonl"], "baseline_snapshot_id")
     registered_ids = set(active_documents)
     for values in jsonl_ids.values():
         registered_ids.update(values)
@@ -741,15 +905,38 @@ def validate_proposal_reviews(
                 ):
                     complete_run = True
 
+        baseline_mode = review.get("baseline_assessment_mode")
+        baseline_snapshot_id = str(review.get("baseline_snapshot_id", "")).strip()
+        baseline_applicability_scope = str(review.get("baseline_applicability_scope", "")).strip()
+        baseline_snapshot = baseline_snapshots.get(baseline_snapshot_id)
+        if current_contract and baseline_mode not in DIMENSIONS["baseline_assessment_mode"]:
+            warnings.append(f"{location}: unknown or missing baseline_assessment_mode")
         baseline_ids = id_list(review, "baseline_requirement_ids", location, warnings)
         if any(value not in jsonl_ids["approved_requirements.jsonl"] for value in baseline_ids):
             warnings.append(f"{location}: unknown baseline requirement")
+        if current_contract and baseline_mode == "accepted_baseline":
+            if baseline_snapshot is None:
+                warnings.append(f"{location}: accepted_baseline must use an existing BaselineSnapshot")
+            else:
+                snapshot_requirement_ids = set(id_list(baseline_snapshot, "requirement_ids", location, warnings))
+                if not baseline_applicability_scope:
+                    warnings.append(f"{location}: baseline_applicability_scope is required")
+                if not baseline_ids or not set(baseline_ids).issubset(snapshot_requirement_ids):
+                    warnings.append(f"{location}: baseline requirements must be a non-empty snapshot subset")
+        elif current_contract:
+            if baseline_snapshot_id or baseline_ids or baseline_applicability_scope:
+                warnings.append(f"{location}: reference-only review must not claim an accepted baseline")
         matches = review.get("requirement_matches")
         matched_requirements: list[str] = []
         covered_items: set[str] = set()
         current_quote_items = {
             item_id for item_id, item in quote_items.items() if item.get("quote_id") == quote_id
         }
+        if current_contract and baseline_mode != "accepted_baseline":
+            for item_id in current_quote_items:
+                linked_requirements = quote_items[item_id].get("approved_requirement_ids", [])
+                if isinstance(linked_requirements, list) and linked_requirements:
+                    warnings.append(f"{location}: reference-only quote item {item_id} links an approved requirement")
         if not isinstance(matches, list) or any(not isinstance(value, dict) for value in matches):
             warnings.append(f"{location}: requirement_matches must be an array of objects")
             matches = []
@@ -769,6 +956,44 @@ def validate_proposal_reviews(
         unmatched = set(id_list(review, "unmatched_quote_item_ids", location, warnings))
         if unmatched & covered_items or unmatched | covered_items != current_quote_items:
             warnings.append(f"{location}: every quote item must be classified exactly once")
+
+        reference_comparisons = review.get("reference_comparisons", [])
+        if not isinstance(reference_comparisons, list) or any(
+            not isinstance(value, dict) for value in reference_comparisons
+        ):
+            warnings.append(f"{location}: reference_comparisons must be an array of objects")
+            reference_comparisons = []
+        for number, comparison in enumerate(reference_comparisons, 1):
+            comparison_location = f"{location}:reference comparison {number}"
+            document_id = str(comparison.get("document_id", "")).strip()
+            version = comparison.get("document_version")
+            sha256 = str(comparison.get("sha256", "")).strip()
+            if (version, sha256) not in document_versions.get(document_id, set()):
+                warnings.append(f"{comparison_location}: unknown document version")
+            elif (document_id, version, sha256) not in complete_read_versions:
+                warnings.append(f"{comparison_location}: reference document version has no complete ReadingRun")
+            if document_id == source_id:
+                warnings.append(f"{comparison_location}: proposal cannot be its own reference document")
+            for field in ("project_role", "applicability_scope", "statement", "locator", "limitations"):
+                if not str(comparison.get(field, "")).strip():
+                    warnings.append(f"{comparison_location}: {field} is required")
+            if comparison.get("status") not in DIMENSIONS["proposal_match_status"]:
+                warnings.append(f"{comparison_location}: unknown comparison status")
+            linked_items = id_list(comparison, "quote_item_ids", comparison_location, warnings)
+            if any(value not in current_quote_items for value in linked_items):
+                warnings.append(f"{comparison_location}: links an item from another quote")
+        baseline_limitations = review.get("baseline_limitations", [])
+        if not isinstance(baseline_limitations, list) or any(
+            not isinstance(value, str) or not value.strip() for value in baseline_limitations
+        ):
+            warnings.append(f"{location}: baseline_limitations must be a string array")
+            baseline_limitations = []
+        if current_contract and baseline_mode == "reference_only" and not reference_comparisons:
+            warnings.append(f"{location}: reference_only mode requires at least one explicit reference comparison")
+        if current_contract and baseline_mode == "no_relevant_documents" and reference_comparisons:
+            warnings.append(f"{location}: no_relevant_documents mode cannot contain reference comparisons")
+        if current_contract and baseline_mode != "accepted_baseline" and not baseline_limitations:
+            warnings.append(f"{location}: review without an accepted baseline must state dependent limitations")
 
         checks = review.get("technical_checks")
         if not isinstance(checks, list) or not checks or any(not isinstance(value, dict) for value in checks):
@@ -928,7 +1153,8 @@ def validate_proposal_reviews(
                 or inventory.get("status") != "complete"
                 or not complete_run
                 or blockers
-                or not baseline_ids
+                or (current_contract and baseline_mode not in DIMENSIONS["baseline_assessment_mode"])
+                or (current_contract and baseline_mode == "accepted_baseline" and not baseline_ids)
                 or not current_quote_items
             ):
                 warnings.append(f"{location}: ready review still has incomplete coverage or essential blockers")
@@ -957,6 +1183,7 @@ def audit(root: Path) -> list[str]:
     project_id = str(project.get("project_id", "")).strip()
     documents = json.loads((control / "documents.json").read_text(encoding="utf-8"))
     active_documents: set[str] = set()
+    proposal_document_ids: set[str] = set()
     document_versions: dict[str, set[tuple[object, str]]] = {}
     current_document_versions: dict[str, tuple[object, str]] = {}
     seen_document_ids: set[str] = set()
@@ -973,6 +1200,9 @@ def audit(root: Path) -> list[str]:
         seen_document_ids.add(document_id)
         if item.get("status") == "active":
             active_documents.add(document_id)
+        relative_path = str(item.get("relative_path", "")).replace("\\", "/").strip("/")
+        if relative_path.split("/", 1)[0].casefold() == "03_Коммерческие_предложения".casefold():
+            proposal_document_ids.add(document_id)
         versions: set[tuple[object, str]] = set()
         raw_versions = item.get("versions", [])
         if not isinstance(raw_versions, list):
@@ -1122,6 +1352,51 @@ def audit(root: Path) -> list[str]:
                 ):
                     warnings.append(f"reading_runs.jsonl:{line_number}: visual or structural reading requirements are unchecked")
 
+    complete_read_versions: set[tuple[str, object, str]] = set()
+    summaries_root = (root / ".home-control" / "summaries").resolve()
+    for _, record in jsonl_records["reading_runs.jsonl"]:
+        if record.get("status") != "complete":
+            continue
+        source_id = str(record.get("source_document_id", "")).strip()
+        version = record.get("document_version")
+        sha256 = str(record.get("sha256", "")).strip()
+        inventory = inventories_by_source.get((source_id, version, sha256))
+        coverage = record.get("coverage")
+        summary_path = str(record.get("summary_path", "")).strip()
+        summary = root / summary_path if summary_path else None
+        try:
+            summary_resolved = summary.resolve() if summary else None
+            summary_valid = bool(
+                summary_resolved
+                and summaries_root in summary_resolved.parents
+                and summary_resolved.is_file()
+                and summary is not None
+                and not is_linklike(summary)
+            )
+        except (OSError, RuntimeError):
+            summary_valid = False
+        inventory_requirements = inventory.get("reading_requirements", []) if inventory else None
+        checked_requirements = coverage.get("checked_requirements", []) if isinstance(coverage, dict) else None
+        requirements_valid = bool(
+            isinstance(inventory_requirements, list)
+            and isinstance(checked_requirements, list)
+            and all(isinstance(value, str) and value.strip() for value in inventory_requirements)
+            and all(isinstance(value, str) and value.strip() for value in checked_requirements)
+            and len(checked_requirements) == len(set(checked_requirements))
+            and set(checked_requirements) == set(inventory_requirements)
+        )
+        if (
+            source_id in active_documents
+            and (version, sha256) in document_versions.get(source_id, set())
+            and inventory is not None
+            and inventory.get("status") == "complete"
+            and complete_coverage_is_valid(coverage)
+            and normalized_unit_set(coverage.get("expected_units")) == normalized_unit_set(inventory.get("expected_units"))
+            and requirements_valid
+            and summary_valid
+        ):
+            complete_read_versions.add((source_id, version, sha256))
+
     facts = jsonl_ids["facts.jsonl"]
     for line_number, record in jsonl_records["decisions.jsonl"]:
         if record.get("status") not in DIMENSIONS["owner_decision_status"]:
@@ -1156,6 +1431,26 @@ def audit(root: Path) -> list[str]:
         decision_id = str(record.get("decision_id", "")).strip()
         if decision_id and decision_id not in decisions:
             warnings.append(f"approved_requirements.jsonl:{line_number}: unknown decision_id {decision_id}")
+        snapshot_id = str(record.get("baseline_snapshot_id", "")).strip()
+        if snapshot_id and snapshot_id not in jsonl_ids["baseline_snapshots.jsonl"]:
+            warnings.append(f"approved_requirements.jsonl:{line_number}: unknown baseline_snapshot_id")
+        if not str(record.get("statement", "")).strip() or not str(record.get("scope", "")).strip():
+            warnings.append(f"approved_requirements.jsonl:{line_number}: atomic statement and scope are required")
+        if record.get("verification_status") not in DIMENSIONS["verification_status"]:
+            warnings.append(f"approved_requirements.jsonl:{line_number}: missing or unknown verification_status")
+        for fact_id in source_fact_ids:
+            fact = records_by_id(jsonl_records["facts.jsonl"], "fact_id").get(fact_id)
+            if fact is not None and not str(fact.get("locator", "")).strip():
+                warnings.append(f"approved_requirements.jsonl:{line_number}: source fact {fact_id} has no precise locator")
+
+    validate_baseline_snapshots(
+        jsonl_records,
+        jsonl_ids,
+        document_versions,
+        complete_read_versions,
+        proposal_document_ids,
+        warnings,
+    )
 
     validate_proposal_reviews(
         root,
@@ -1163,6 +1458,8 @@ def audit(root: Path) -> list[str]:
         jsonl_ids,
         active_documents,
         current_document_versions,
+        document_versions,
+        complete_read_versions,
         warnings,
     )
 

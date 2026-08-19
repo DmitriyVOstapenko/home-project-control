@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.1",
-  "legacy_contract_versions": ["1.0"],
+  "contract_version": "1.2",
+  "legacy_contract_versions": ["1.0", "1.1"],
   "check_statuses": ["completed", "not_applicable", "blocked", "requires_specialist"],
   "ready_statuses": ["completed", "not_applicable"],
   "foreman_verdicts": [
@@ -18,8 +18,8 @@
   "universal_checks": [
     {"check_id": "source_coverage", "title": "Полное чтение точной версии и покрытие источника"},
     {"check_id": "discipline_identification", "title": "Определение всех затронутых профессиональных направлений"},
-    {"check_id": "project_fit", "title": "Соответствие базовой линии, фактическому состоянию и ограничениям объекта"},
-    {"check_id": "bidirectional_scope", "title": "Двустороннее покрытие требований проекта и строк КП"},
+    {"check_id": "project_fit", "title": "Соответствие принятой базовой линии либо отдельное справочное сопоставление с имеющимися документами"},
+    {"check_id": "bidirectional_scope", "title": "Двустороннее покрытие принятых требований и строк КП либо классификация строк без принятой базы"},
     {"check_id": "quantities_and_arithmetic", "title": "Объёмы, единицы, ставки, суммы и итоги"},
     {"check_id": "price_and_commercial_terms", "title": "Цена, налоги, доставка, оплата, сроки, гарантия и исключения"},
     {"check_id": "contractor_calculations", "title": "Исходные данные и расчёты подрядчика"},

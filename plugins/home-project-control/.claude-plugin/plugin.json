@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "home-project-control",
+  "version": "0.2.0",
+  "description": "Проверяемая локальная база знаний и контроль жизненного цикла физических объектов, оборудования, работ и расходов.",
+  "author": {
+    "name": "Dmitriy",
+    "url": "https://github.com/DmitriyVOstapenko"
+  },
+  "homepage": "https://github.com/DmitriyVOstapenko/home-project-control",
+  "repository": "https://github.com/DmitriyVOstapenko/home-project-control",
+  "license": "MIT",
+  "keywords": ["construction", "property", "contractors", "equipment", "evidence"],
+  "skills": "./skills/"
+}
