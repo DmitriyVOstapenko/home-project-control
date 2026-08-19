@@ -289,6 +289,11 @@ def complete_proposal_contract(
     requirement_ids: list[str],
     finding_ids: list[str],
     compliance_assessment_ids: list[str],
+    quote_id: str,
+    price_observation_ids: list[str],
+    information_gap_ids: list[str],
+    contractor_questions: list[str],
+    as_is_fact_ids: list[str],
 ) -> dict:
     def observations(statement: str) -> list[dict]:
         return [{
@@ -411,6 +416,78 @@ def complete_proposal_contract(
         "owner_action": "получить письменное подтверждение подрядчика",
         "source_ids": source_ids,
     }]
+    decision_criteria = [{
+        "criterion_id": "DC-1",
+        "title": "Получить требуемый результат без скрытой доплаты",
+        "kind": "mandatory",
+        "weight": None,
+        "rationale": "Критерий следует из принятого объёма и проверяемой цены",
+        "source_ids": source_ids,
+    }]
+    alternative_comparisons = [
+        {
+            "comparison_id": f"AC-{index}",
+            "alternative_id": alternative_id,
+            "axis_results": [
+                {
+                    "axis_id": axis["axis_id"],
+                    "status": "satisfies",
+                    "result": f"{alternative_id}: ось {axis['axis_id']} сопоставлена с тестовым контекстом",
+                    "blocking_inputs": [],
+                    "source_ids": source_ids,
+                }
+                for axis in PROPOSAL_CONTRACT["alternative_comparison_axes"]
+            ],
+        }
+        for index, alternative_id in enumerate(alternative_ids, 1)
+    ]
+    price_comparisons = [{
+        "comparison_id": "PC-1",
+        "subject_id": quote_id,
+        "status": "comparable",
+        "scope_basis": "два светильника с монтажом",
+        "quantity_basis": "2 шт.",
+        "tax_context": "налоговый контекст одинаков",
+        "delivery_context": "доставка включена в сопоставляемый объём",
+        "installation_context": "монтаж включён",
+        "observed_at": "2026-08-19",
+        "region": "тестовый регион",
+        "price_observation_ids": price_observation_ids,
+        "limitations": [],
+        "source_ids": [*source_ids, *price_observation_ids],
+    }]
+    clarification_requests = [
+        {
+            "clarification_id": f"CLR-{index}",
+            "information_gap_id": gap_id,
+            "recipient": "contractor",
+            "question": question,
+            "requested_evidence": "письменное подтверждение в редакции КП или договора",
+            "answer_format": "документ с однозначным сроком и объёмом обязательства",
+            "priority": "high",
+            "status": "verified",
+            "blocked_conclusions": ["готовность гарантийных условий к договору"],
+            "response_source_ids": [source_ids[0]],
+            "resolution": "подтверждение получено в проверяемой версии предложения",
+            "source_ids": [gap_id, *source_ids],
+        }
+        for index, (gap_id, question) in enumerate(zip(information_gap_ids, contractor_questions), 1)
+    ]
+    management_scenarios = [
+        {
+            "scenario_id": f"MSC-{index}",
+            "alternative_id": alternative_id,
+            "status": "partial",
+            "cost_summary": "Сопоставлена полная стоимость тестового объёма; неизвестные затраты отсутствуют.",
+            "schedule_summary": "Монтаж сопоставлен с тестовой последовательностью без отдельного календарного расчёта.",
+            "blocking_inputs": ["создать связанные CostPlan и SchedulePlan до договорной готовности"],
+            "cost_plan_id": "",
+            "schedule_plan_id": "",
+            "change_impact_assessment_id": "",
+            "source_ids": source_ids,
+        }
+        for index, alternative_id in enumerate(alternative_ids, 1)
+    ]
     return {
         "mandatory_checks": mandatory,
         "discipline_checks": discipline_checks,
@@ -419,7 +496,7 @@ def complete_proposal_contract(
         "additional_analysis_summary": "Открытая проверка дополнительных рисков выполнена; новых классов риска не найдено.",
         "foreman_assessment": {
             "verdict": "conditionally_recommended",
-            "decision_readiness": "ready_for_contract",
+            "decision_readiness": "ready_for_negotiation",
             "summary": "Тестовое предложение можно рассматривать при закреплении гарантии и критериев приёмки.",
             "decision_request": "Решить, запрашивать ли уточнённую редакцию КП на указанных условиях",
             "preferred_alternative_id": "ALT-OPT",
@@ -449,6 +526,21 @@ def complete_proposal_contract(
         "acceptance_plan": acceptance_plan,
         "priority_risks": priority_risks,
         "risk_summary": "Один управляемый риск до договора: требуется закрепить гарантию.",
+        "decision_criteria": decision_criteria,
+        "alternative_comparisons": alternative_comparisons,
+        "price_comparisons": price_comparisons,
+        "clarification_requests": clarification_requests,
+        "coordination_run_ids": [],
+        "management_scenarios": management_scenarios,
+        "challenge_review": {
+            "status": "recommendation_held",
+            "recommendation_under_test": "Оптимизировать исходное решение до договора",
+            "strongest_counterargument": "Решение иного класса может дать лучшую стоимость жизненного цикла",
+            "failure_modes": ["скрытые работы не раскрыты в окончательном договоре"],
+            "decision_changing_inputs": ["новое сопоставимое предложение с меньшей полной стоимостью"],
+            "conclusion": "После оппонирующего прохода рекомендация сохраняется только при закреплении условий.",
+            "source_ids": source_ids,
+        },
         "completion_manifest": {
             "contract_version": PROPOSAL_CONTRACT["contract_version"],
             "mandatory_check_ids": [value["check_id"] for value in mandatory],
@@ -461,6 +553,16 @@ def complete_proposal_contract(
             "site_verification_ids": [value["verification_id"] for value in site_plan],
             "acceptance_plan_ids": [value["acceptance_id"] for value in acceptance_plan],
             "priority_risk_ids": [value["risk_id"] for value in priority_risks],
+            "baseline_scope_requirement_ids": ["AR-1", "AR-2"],
+            "as_is_match_fact_ids": as_is_fact_ids,
+            "context_conflict_ids": [],
+            "decision_criterion_ids": [value["criterion_id"] for value in decision_criteria],
+            "alternative_comparison_ids": [value["comparison_id"] for value in alternative_comparisons],
+            "price_comparison_ids": [value["comparison_id"] for value in price_comparisons],
+            "clarification_ids": [value["clarification_id"] for value in clarification_requests],
+            "coordination_run_ids": [],
+            "management_scenario_ids": [value["scenario_id"] for value in management_scenarios],
+            "challenge_review_completed": True,
         },
     }
 
@@ -2367,6 +2469,57 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(baseline_preview.returncode, 0, baseline_preview.stderr)
             baseline_applied = run_script(RECORD_BASELINE, project, baseline_package_path, "--apply")
             self.assertEqual(baseline_applied.returncode, 0, baseline_applied.stderr)
+            as_is_fact = {
+                "fact_id": "F-ASIS-PROP",
+                "statement": "В тестовой зоне подтверждён существующий источник питания для двух светильников",
+                "statement_kind": "source_fact",
+                "evidence_origin": "owner_confirmation",
+                "verification_status": "verified",
+                "locator": "подтверждение владельца от 2026-08-19",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            as_is_package = {
+                "schema_version": "1.0",
+                "facts": [as_is_fact],
+                "decisions": [{
+                    "decision_id": "D-ASIS-PROP",
+                    "decision_type": "as_is_snapshot_acceptance",
+                    "decision": "Использовать подтверждённое фактическое состояние зоны при анализе КП",
+                    "status": "approved",
+                    "approved_by": "owner",
+                    "approved_at": "2026-08-19",
+                    "source_fact_ids": ["F-ASIS-PROP"],
+                }],
+                "as_is_snapshots": [{
+                    "as_is_snapshot_id": "AIS-PROP",
+                    "snapshot_version": 1,
+                    "scope": "Тестовая зона освещения",
+                    "captured_at": "2026-08-19",
+                    "owner_decision_id": "D-ASIS-PROP",
+                    "supersedes_as_is_snapshot_id": "",
+                    "document_versions": [],
+                    "source_fact_ids": ["F-ASIS-PROP"],
+                    "information_gap_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "physical_element_ids": [],
+                    "system_ids": [],
+                    "asset_ids": [],
+                    "route_ids": [],
+                    "asset_event_ids": [],
+                    "condition_assessment_ids": [],
+                    "limitations": ["Источник питания не измерялся инструментально в тесте"],
+                }],
+            }
+            as_is_path = project / "proposal-as-is-package.json"
+            as_is_path.write_text(json.dumps(as_is_package, ensure_ascii=False, indent=2), encoding="utf-8")
+            as_is_applied = run_script(RECORD_ANALYSIS, project, as_is_path, "--apply")
+            self.assertEqual(as_is_applied.returncode, 0, as_is_applied.stderr)
             regulatory_path = project / "proposal-regulatory-package.json"
             regulatory_path.write_text(
                 json.dumps(
@@ -2397,7 +2550,7 @@ class ProjectToolsTest(unittest.TestCase):
             }
             package = {
                 "schema_version": "1.0",
-                "facts": [quote_fact],
+                "facts": [quote_fact, as_is_fact],
                 "reading_runs": [{
                     "reading_run_id": "RR-OFFER-1",
                     "source_document_id": document["document_id"],
@@ -2425,7 +2578,7 @@ class ProjectToolsTest(unittest.TestCase):
                     }],
                     "fact_ids": ["F-QUOTE-1"],
                     "requirement_ids": ["AR-1"],
-                    "information_gap_ids": [],
+                    "information_gap_ids": ["GAP-1"],
                     "site_ids": [],
                     "zone_ids": [],
                     "system_ids": [],
@@ -2441,11 +2594,21 @@ class ProjectToolsTest(unittest.TestCase):
                     "coverage_gaps": [],
                     "fact_ids": ["F-QUOTE-1"],
                     "requirement_ids": [],
-                    "information_gap_ids": [],
+                    "information_gap_ids": ["GAP-1"],
                     "conflict_fact_ids": [],
                     "status": "complete",
                 }],
-                "information_gaps": [],
+                "information_gaps": [{
+                    "gap_id": "GAP-1",
+                    "description": "Нужно закрепить подтверждённый срок гарантии в договорной редакции",
+                    "blocked_conclusion": "готовность гарантийных условий к договору",
+                    "required_provider": "подрядчик",
+                    "required_format": "письменное условие договора",
+                    "status": "verified",
+                    "package_ids": ["PKG-1"],
+                    "blocked_entity_ids": ["Q-1"],
+                    "answer_source_ids": ["F-QUOTE-1"],
+                }],
                 "shared_resources": [],
                 "resource_demands": [],
                 "package_interfaces": [],
@@ -2466,6 +2629,18 @@ class ProjectToolsTest(unittest.TestCase):
                     "quantity": 2, "unit": "шт", "unit_price": 1000, "amount": 2000,
                     "approved_requirement_ids": ["AR-1"], "target_entity_ids": [],
                     "proposal_match_status": "exact", "verifiability": "verifiable",
+                }],
+                "price_observations": [{
+                    "price_observation_id": "PO-1",
+                    "subject_entity_id": "QI-1",
+                    "observed_at": "2026-08-19",
+                    "region": "тестовый регион",
+                    "currency": "RUB",
+                    "tax_context": "с налогом",
+                    "delivery_context": "доставка включена",
+                    "availability_context": "доступно на дату проверки",
+                    "source_url": "https://example.test/price",
+                    "source_fact_ids": ["F-QUOTE-1"],
                 }],
                 "findings": [
                     {
@@ -2494,18 +2669,46 @@ class ProjectToolsTest(unittest.TestCase):
                 ],
                 "proposal_reviews": [{
                     "proposal_review_id": "PR-1", "source_document_id": document["document_id"],
+                    "review_series_id": "PRS-1", "review_revision": 1,
+                    "supersedes_proposal_review_id": "",
                     "document_version": 1, "sha256": document["sha256"], "quote_id": "Q-1",
                     "status": "ready_for_owner", "disciplines": ["electrical", "equipment_supply"],
                     "inventory_id": inventory["inventory_id"], "reading_run_ids": ["RR-OFFER-1"],
                     "fact_extraction_run_ids": ["FER-OFFER-1"],
                     "project_package_ids": ["PKG-1"],
-                    "information_gap_ids": [],
+                    "information_gap_ids": ["GAP-1"],
                     "coordination_issue_ids": [],
                     "compliance_assessment_ids": ["RCA-1"],
                     "baseline_assessment_mode": "accepted_baseline",
+                    "context_mode": "as_is_and_baseline",
+                    "as_is_snapshot_id": "AIS-PROP",
+                    "as_is_applicability_scope": "тестовая зона и существующий источник питания",
+                    "as_is_fact_matches": [{
+                        "fact_id": "F-ASIS-PROP",
+                        "status": "applied",
+                        "quote_item_ids": ["QI-1"],
+                        "alternative_ids": ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
+                        "notes": "Каждый вариант проверяется с учётом существующего источника питания.",
+                        "source_ids": ["F-ASIS-PROP", "QI-1"],
+                    }],
+                    "target_entity_ids": [],
+                    "context_limitations": ["Фактическая мощность источника требует инструментального подтверждения до начала работ."],
+                    "context_conflicts": [],
                     "baseline_snapshot_id": "BL-1",
                     "baseline_applicability_scope": "тестовая зона, поставка и монтаж освещения",
                     "baseline_requirement_ids": ["AR-1"],
+                    "baseline_scope_classifications": [
+                        {
+                            "requirement_id": "AR-1", "status": "applicable",
+                            "rationale": "Требование относится к предмету и тестовой зоне КП.",
+                            "source_ids": ["AR-1", "QI-1"],
+                        },
+                        {
+                            "requirement_id": "AR-2", "status": "not_applicable",
+                            "rationale": "Требование относится к другой зоне.",
+                            "source_ids": ["AR-2"],
+                        },
+                    ],
                     "requirement_matches": [{"requirement_id": "AR-1", "status": "exact", "quote_item_ids": ["QI-1"]}],
                     "reference_comparisons": [],
                     "baseline_limitations": [],
@@ -2542,15 +2745,20 @@ class ProjectToolsTest(unittest.TestCase):
                     "finding_ids": ["FN-1", "FN-2"],
                     "alternative_ids": ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
                     "essential_blockers": [],
-                    "contractor_questions": ["Подтвердите срок гарантии"],
+                    "contractor_questions": ["Подтвердите включение согласованного срока гарантии в договор"],
                     **complete_proposal_contract(
                         ["electrical", "equipment_supply"],
-                        ["QI-1", "AR-1"],
+                        ["QI-1", "AR-1", "F-ASIS-PROP"],
                         ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
                         ["QI-1"],
                         ["AR-1"],
                         ["FN-1"],
                         ["RCA-1"],
+                        "Q-1",
+                        ["PO-1"],
+                        ["GAP-1"],
+                        ["Подтвердите включение согласованного срока гарантии в договор"],
+                        ["F-ASIS-PROP"],
                     ),
                 }],
             }
@@ -2633,10 +2841,20 @@ class ProjectToolsTest(unittest.TestCase):
             reference_review = reference_package["proposal_reviews"][0]
             reference_review.update({
                 "proposal_review_id": "PR-REF-1",
+                "review_series_id": "PRS-REF-1",
                 "baseline_assessment_mode": "reference_only",
+                "context_mode": "documents_only",
+                "as_is_snapshot_id": "",
+                "as_is_applicability_scope": "",
+                "as_is_fact_matches": [],
+                "target_entity_ids": [],
+                "context_limitations": [
+                    "Нет принятого фактического снимка и принятой проектной базы для вывода о соответствии."
+                ],
                 "baseline_snapshot_id": "",
                 "baseline_applicability_scope": "",
                 "baseline_requirement_ids": [],
+                "baseline_scope_classifications": [],
                 "requirement_matches": [],
                 "unmatched_quote_item_ids": ["QI-1"],
                 "reference_comparisons": [{
@@ -2655,6 +2873,8 @@ class ProjectToolsTest(unittest.TestCase):
                     "Соответствие принятой базе не оценено до отдельного решения владельца."
                 ],
             })
+            reference_review["completion_manifest"]["baseline_scope_requirement_ids"] = []
+            reference_review["completion_manifest"]["as_is_match_fact_ids"] = []
             reference_review["foreman_assessment"]["decision_readiness"] = "ready_for_negotiation"
             for assessment in reference_review["technical_alternative_assessments"]:
                 assessment["project_fit"] = "Сопоставлено только справочно; принятая база отсутствует."
@@ -2718,6 +2938,82 @@ class ProjectToolsTest(unittest.TestCase):
             rejected = run_script(RECORD_PROPOSAL, project, invalid_path)
             self.assertEqual(rejected.returncode, 2)
             self.assertEqual((control / "proposal_reviews.jsonl").read_text(encoding="utf-8"), "")
+
+            missing_context = json.loads(json.dumps(package))
+            missing_context["proposal_reviews"][0].pop("context_mode")
+            missing_context_path = project / "missing-proposal-context.json"
+            missing_context_path.write_text(json.dumps(missing_context, ensure_ascii=False), encoding="utf-8")
+            rejected_context = run_script(RECORD_PROPOSAL, project, missing_context_path)
+            self.assertEqual(rejected_context.returncode, 2)
+            self.assertIn("context", rejected_context.stderr)
+
+            incomplete_as_is = json.loads(json.dumps(package))
+            incomplete_as_is["proposal_reviews"][0]["as_is_fact_matches"] = []
+            incomplete_as_is_path = project / "incomplete-as-is-context.json"
+            incomplete_as_is_path.write_text(json.dumps(incomplete_as_is, ensure_ascii=False), encoding="utf-8")
+            rejected_as_is = run_script(RECORD_PROPOSAL, project, incomplete_as_is_path)
+            self.assertEqual(rejected_as_is.returncode, 2)
+            self.assertIn("classify every fact", rejected_as_is.stderr)
+
+            incomplete_baseline_scope = json.loads(json.dumps(package))
+            incomplete_baseline_scope["proposal_reviews"][0]["baseline_scope_classifications"] = [
+                incomplete_baseline_scope["proposal_reviews"][0]["baseline_scope_classifications"][0]
+            ]
+            incomplete_baseline_scope_path = project / "incomplete-baseline-scope.json"
+            incomplete_baseline_scope_path.write_text(
+                json.dumps(incomplete_baseline_scope, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_baseline_scope = run_script(RECORD_PROPOSAL, project, incomplete_baseline_scope_path)
+            self.assertEqual(rejected_baseline_scope.returncode, 2)
+            self.assertIn("classify every requirement", rejected_baseline_scope.stderr)
+
+            missing_comparison = json.loads(json.dumps(package))
+            missing_comparison["proposal_reviews"][0]["alternative_comparisons"] = missing_comparison[
+                "proposal_reviews"
+            ][0]["alternative_comparisons"][:-1]
+            missing_comparison_path = project / "missing-alternative-comparison.json"
+            missing_comparison_path.write_text(json.dumps(missing_comparison, ensure_ascii=False), encoding="utf-8")
+            rejected_comparison = run_script(RECORD_PROPOSAL, project, missing_comparison_path)
+            self.assertEqual(rejected_comparison.returncode, 2)
+            self.assertIn("compare every registered alternative", rejected_comparison.stderr)
+
+            missing_price_comparison = json.loads(json.dumps(package))
+            missing_price_comparison["proposal_reviews"][0]["price_comparisons"] = []
+            missing_price_path = project / "missing-price-comparison.json"
+            missing_price_path.write_text(json.dumps(missing_price_comparison, ensure_ascii=False), encoding="utf-8")
+            rejected_price = run_script(RECORD_PROPOSAL, project, missing_price_path)
+            self.assertEqual(rejected_price.returncode, 2)
+            self.assertIn("price_comparisons", rejected_price.stderr)
+
+            incomplete_management = json.loads(json.dumps(package))
+            incomplete_management["proposal_reviews"][0]["foreman_assessment"][
+                "decision_readiness"
+            ] = "ready_for_contract"
+            incomplete_management_path = project / "incomplete-management-scenario.json"
+            incomplete_management_path.write_text(
+                json.dumps(incomplete_management, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_management = run_script(RECORD_PROPOSAL, project, incomplete_management_path)
+            self.assertEqual(rejected_management.returncode, 2)
+            self.assertIn("preferred management scenario", rejected_management.stderr)
+
+            open_clarification = json.loads(json.dumps(package))
+            open_clarification["proposal_reviews"][0]["foreman_assessment"]["decision_readiness"] = "ready_for_contract"
+            open_item = open_clarification["proposal_reviews"][0]["clarification_requests"][0]
+            open_item.update({"status": "open", "response_source_ids": [], "resolution": ""})
+            open_clarification_path = project / "open-critical-clarification.json"
+            open_clarification_path.write_text(json.dumps(open_clarification, ensure_ascii=False), encoding="utf-8")
+            rejected_clarification = run_script(RECORD_PROPOSAL, project, open_clarification_path)
+            self.assertEqual(rejected_clarification.returncode, 2)
+            self.assertIn("open critical or high-priority clarification", rejected_clarification.stderr)
+
+            insufficient_challenge = json.loads(json.dumps(package))
+            insufficient_challenge["proposal_reviews"][0]["challenge_review"]["status"] = "insufficient_evidence"
+            insufficient_challenge_path = project / "insufficient-challenge.json"
+            insufficient_challenge_path.write_text(json.dumps(insufficient_challenge, ensure_ascii=False), encoding="utf-8")
+            rejected_challenge = run_script(RECORD_PROPOSAL, project, insufficient_challenge_path)
+            self.assertEqual(rejected_challenge.returncode, 2)
+            self.assertIn("challenge pass", rejected_challenge.stderr)
 
             missing_compliance = json.loads(json.dumps(package))
             missing_compliance["proposal_reviews"][0]["compliance_assessment_ids"] = []
@@ -2806,6 +3102,7 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("scope boundary", rejected_scope.stderr)
 
             unresolved_cost = json.loads(json.dumps(package))
+            unresolved_cost["proposal_reviews"][0]["foreman_assessment"]["decision_readiness"] = "ready_for_contract"
             unresolved_cost["proposal_reviews"][0]["cost_exposure"].update({
                 "status": "partial",
                 "estimated_total_high": None,
@@ -2879,6 +3176,12 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("## Полная денежная экспозиция", dossier_text)
             self.assertIn("## Нормативное соответствие", dossier_text)
             self.assertIn("RCA-1", dossier_text)
+            self.assertIn("AIS-PROP", dossier_text)
+            self.assertIn("## Фактическое состояние и строки КП", dossier_text)
+            self.assertIn("## Единая матрица альтернатив", dossier_text)
+            self.assertIn("## Сопоставимость проверенных цен", dossier_text)
+            self.assertIn("## Стоимость и календарь вариантов", dossier_text)
+            self.assertIn("## Оппонирующий проход", dossier_text)
             refused = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
             self.assertEqual(refused.returncode, 2)
             escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")

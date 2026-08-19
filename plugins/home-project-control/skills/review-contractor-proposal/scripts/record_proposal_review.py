@@ -213,6 +213,9 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
     baseline_snapshots = read_jsonl(
         root / ".home-control" / "baseline_snapshots.jsonl", "baseline_snapshot_id"
     )[1]
+    as_is_snapshots = read_jsonl(
+        root / ".home-control" / "as_is_snapshots.jsonl", "as_is_snapshot_id"
+    )[1]
     inventories = read_jsonl(root / ".home-control" / "document_inventories.jsonl", "inventory_id")[1]
     compliance_assessments = read_jsonl(
         root / ".home-control" / "compliance_assessments.jsonl", "compliance_assessment_id"
@@ -223,6 +226,19 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         if str(snapshot.get("supersedes_baseline_snapshot_id", "")).strip()
     }
     current_baseline_ids = set(baseline_snapshots) - superseded_baseline_ids
+    superseded_as_is_ids = {
+        str(snapshot.get("supersedes_as_is_snapshot_id", "")).strip()
+        for snapshot in as_is_snapshots.values()
+        if str(snapshot.get("supersedes_as_is_snapshot_id", "")).strip()
+    }
+    current_as_is_ids = set(as_is_snapshots) - superseded_as_is_ids
+    management_records = {
+        "cost_plan_id": read_jsonl(root / ".home-control" / "cost_plans.jsonl", "cost_plan_id")[1],
+        "schedule_plan_id": read_jsonl(root / ".home-control" / "schedule_plans.jsonl", "schedule_plan_id")[1],
+        "change_impact_assessment_id": read_jsonl(
+            root / ".home-control" / "change_impact_assessments.jsonl", "change_impact_assessment_id"
+        )[1],
+    }
 
     for record in additions["reading_runs"]:
         document_id = str(record.get("source_document_id", "")).strip()
@@ -321,9 +337,12 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         | set(requirements)
         | set(inventories)
         | set(baseline_snapshots)
+        | set(as_is_snapshots)
         | set(compliance_assessments)
     )
     for mapping in known.values():
+        registered_ids.update(mapping)
+    for mapping in management_records.values():
         registered_ids.update(mapping)
 
     for review in additions["proposal_reviews"]:
@@ -533,6 +552,153 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             raise ValueError(f"ProposalReview {review_id} no_relevant_documents mode cannot have reference comparisons")
         if baseline_mode != "accepted_baseline" and not baseline_limitations:
             raise ValueError(f"ProposalReview {review_id} without an accepted baseline must state dependent limitations")
+
+        if review.get("completion_manifest", {}).get("contract_version") == PROPOSAL_CONTRACT["contract_version"]:
+            series_id = str(review.get("review_series_id", "")).strip()
+            revision = review.get("review_revision")
+            supersedes_review_id = str(review.get("supersedes_proposal_review_id", "")).strip()
+            same_series = [
+                value for value in known["proposal_reviews"].values()
+                if value.get("review_series_id") == series_id and value.get("proposal_review_id") != review_id
+            ]
+            if any(value.get("review_revision") == revision for value in same_series):
+                raise ValueError(f"ProposalReview {review_id} repeats review_revision in its series")
+            if isinstance(revision, int) and revision > 1:
+                prior = known["proposal_reviews"].get(supersedes_review_id)
+                if (
+                    prior is None
+                    or prior.get("review_series_id") != series_id
+                    or prior.get("review_revision") != revision - 1
+                ):
+                    raise ValueError(f"ProposalReview {review_id} does not supersede the immediately preceding revision")
+
+            context_mode = review.get("context_mode")
+            as_is_snapshot_id = str(review.get("as_is_snapshot_id", "")).strip()
+            as_is_snapshot = as_is_snapshots.get(as_is_snapshot_id)
+            as_is_matches = review.get("as_is_fact_matches", [])
+            if context_mode in {"as_is_and_baseline", "as_is_only"}:
+                if as_is_snapshot is None or as_is_snapshot_id not in current_as_is_ids:
+                    raise ValueError(f"ProposalReview {review_id} must use the current AsIsSnapshot")
+                snapshot_fact_ids = string_list(
+                    as_is_snapshot.get("source_fact_ids", []),
+                    f"AsIsSnapshot {as_is_snapshot_id}.source_fact_ids",
+                )
+                matched_fact_ids = [str(value.get("fact_id", "")).strip() for value in as_is_matches]
+                if sorted(matched_fact_ids) != sorted(snapshot_fact_ids):
+                    raise ValueError(f"ProposalReview {review_id} must classify every fact in its AsIsSnapshot")
+                snapshot_entity_ids: set[str] = set()
+                for field in (
+                    "site_ids", "zone_ids", "physical_element_ids", "system_ids", "asset_ids", "route_ids",
+                    "asset_event_ids", "condition_assessment_ids",
+                ):
+                    snapshot_entity_ids.update(
+                        string_list(as_is_snapshot.get(field, []), f"AsIsSnapshot {as_is_snapshot_id}.{field}")
+                    )
+                target_ids = set(string_list(review.get("target_entity_ids", []), f"ProposalReview {review_id}.target_entity_ids"))
+                if target_ids - snapshot_entity_ids:
+                    raise ValueError(f"ProposalReview {review_id} targets entities outside its AsIsSnapshot")
+                if snapshot_entity_ids and not target_ids:
+                    raise ValueError(f"ProposalReview {review_id} must select target entities from its AsIsSnapshot")
+            elif as_is_matches:
+                raise ValueError(f"ProposalReview {review_id} without as-is context must not contain as_is_fact_matches")
+
+            baseline_scope = review.get("baseline_scope_classifications", [])
+            if baseline_mode == "accepted_baseline":
+                snapshot_requirement_ids = string_list(
+                    baseline_snapshot.get("requirement_ids", []),
+                    f"BaselineSnapshot {baseline_snapshot_id}.requirement_ids",
+                    allow_empty=False,
+                )
+                classified_ids = [str(value.get("requirement_id", "")).strip() for value in baseline_scope]
+                if sorted(classified_ids) != sorted(snapshot_requirement_ids):
+                    raise ValueError(f"ProposalReview {review_id} must classify every requirement in its BaselineSnapshot")
+                applicable_ids = {
+                    str(value.get("requirement_id", "")).strip()
+                    for value in baseline_scope
+                    if value.get("status") == "applicable"
+                }
+                if applicable_ids != set(baseline_ids):
+                    raise ValueError(f"ProposalReview {review_id} applicable baseline scope does not match baseline_requirement_ids")
+                if (
+                    review.get("foreman_assessment", {}).get("decision_readiness") == "ready_for_contract"
+                    and any(value.get("status") == "undetermined" for value in baseline_scope)
+                ):
+                    raise ValueError(f"ProposalReview {review_id} ready_for_contract has undetermined baseline applicability")
+            elif baseline_scope:
+                raise ValueError(f"ProposalReview {review_id} without an accepted baseline must not classify baseline scope")
+
+            review_alternative_ids = set(
+                string_list(review.get("alternative_ids", []), f"ProposalReview {review_id}.alternative_ids")
+            )
+            comparison_alternative_ids = [
+                str(value.get("alternative_id", "")).strip()
+                for value in review.get("alternative_comparisons", [])
+            ]
+            if set(comparison_alternative_ids) != review_alternative_ids or len(comparison_alternative_ids) != len(
+                set(comparison_alternative_ids)
+            ):
+                raise ValueError(f"ProposalReview {review_id} must compare every registered alternative exactly once")
+            scenario_alternative_ids = [
+                str(value.get("alternative_id", "")).strip()
+                for value in review.get("management_scenarios", [])
+            ]
+            if set(scenario_alternative_ids) != review_alternative_ids or len(scenario_alternative_ids) != len(
+                set(scenario_alternative_ids)
+            ):
+                raise ValueError(f"ProposalReview {review_id} must assess cost and schedule for every alternative")
+
+            for match in as_is_matches:
+                if any(value not in quote_item_ids for value in match.get("quote_item_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} as-is match links an item from another quote")
+                if any(value not in review_alternative_ids for value in match.get("alternative_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} as-is match links an unrelated alternative")
+            for conflict in review.get("context_conflicts", []):
+                if any(value not in quote_item_ids for value in conflict.get("quote_item_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} context conflict links an item from another quote")
+                if any(value not in baseline_ids for value in conflict.get("baseline_requirement_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} context conflict links an inapplicable requirement")
+                if any(value not in {item.get('fact_id') for item in as_is_matches} for value in conflict.get("as_is_fact_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} context conflict links an unclassified as-is fact")
+
+            for price in review.get("price_comparisons", []):
+                subject_id = str(price.get("subject_id", "")).strip()
+                if subject_id != quote_id and subject_id not in review_alternative_ids:
+                    raise ValueError(f"ProposalReview {review_id} price comparison has an unrelated subject")
+                if any(value not in known["price_observations"] for value in price.get("price_observation_ids", [])):
+                    raise ValueError(f"ProposalReview {review_id} price comparison links an unknown PriceObservation")
+
+            linked_coordination_ids = string_list(
+                review.get("coordination_run_ids", []), f"ProposalReview {review_id}.coordination_run_ids"
+            )
+            for coordination_id in linked_coordination_ids:
+                coordination = known["coordination_runs"].get(coordination_id)
+                if coordination is None or coordination.get("status") != "complete":
+                    raise ValueError(f"ProposalReview {review_id} links an incomplete CoordinationRun")
+            if len(project_package_ids) > 1 and not any(
+                set(project_package_ids).issubset(set(known["coordination_runs"][value].get("package_ids", [])))
+                for value in linked_coordination_ids
+            ):
+                raise ValueError(f"ProposalReview {review_id} needs a complete CoordinationRun for all linked packages")
+
+            for scenario in review.get("management_scenarios", []):
+                for field, mapping in management_records.items():
+                    identifier = str(scenario.get(field, "")).strip()
+                    if identifier and identifier not in mapping:
+                        raise ValueError(f"ProposalReview {review_id} management scenario links an unknown {field}")
+                if scenario.get("status") == "complete":
+                    cost_plan = management_records["cost_plan_id"].get(str(scenario.get("cost_plan_id", "")).strip())
+                    schedule_plan = management_records["schedule_plan_id"].get(
+                        str(scenario.get("schedule_plan_id", "")).strip()
+                    )
+                    if cost_plan is None or cost_plan.get("status") != "ready_for_baseline":
+                        raise ValueError(f"ProposalReview {review_id} complete scenario requires a ready CostPlan")
+                    if schedule_plan is None or schedule_plan.get("status") != "ready_for_baseline":
+                        raise ValueError(f"ProposalReview {review_id} complete scenario requires a ready SchedulePlan")
+                    if baseline_mode == "accepted_baseline" and baseline_snapshot_id:
+                        if cost_plan.get("baseline_snapshot_id") != baseline_snapshot_id:
+                            raise ValueError(f"ProposalReview {review_id} scenario CostPlan uses another baseline")
+                        if schedule_plan.get("baseline_snapshot_id") != baseline_snapshot_id:
+                            raise ValueError(f"ProposalReview {review_id} scenario SchedulePlan uses another baseline")
 
         checks = review.get("technical_checks")
         if not isinstance(checks, list) or not checks or any(not isinstance(value, dict) for value in checks):

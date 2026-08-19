@@ -109,11 +109,12 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
         contract = self.proposal_contract
-        self.assertEqual(contract["contract_version"], "1.4")
+        self.assertEqual(contract["contract_version"], "1.5")
         self.assertIn("1.0", contract["legacy_contract_versions"])
         self.assertIn("1.1", contract["legacy_contract_versions"])
         self.assertIn("1.2", contract["legacy_contract_versions"])
         self.assertIn("1.3", contract["legacy_contract_versions"])
+        self.assertIn("1.4", contract["legacy_contract_versions"])
         self.assertEqual(
             set(contract["check_statuses"]),
             set(self.ontology["dimensions"]["mandatory_check_status"]),
@@ -131,6 +132,7 @@ class SchemaConsistencyTests(unittest.TestCase):
             ("universal_checks", "check_id"),
             ("discipline_axes", "axis_id"),
             ("technical_alternative_tracks", "track_id"),
+            ("alternative_comparison_axes", "axis_id"),
             ("constructability_phases", "phase_id"),
             ("contractor_assessment_axes", "axis_id"),
         ):
@@ -145,6 +147,18 @@ class SchemaConsistencyTests(unittest.TestCase):
             ("candidate_comparability_statuses", "candidate_comparability_status"),
             ("risk_urgencies", "review_risk_urgency"),
             ("risk_impact_lanes", "review_risk_impact_lane"),
+            ("proposal_context_modes", "proposal_context_mode"),
+            ("baseline_scope_statuses", "baseline_scope_status"),
+            ("as_is_match_statuses", "as_is_match_status"),
+            ("context_conflict_statuses", "context_conflict_status"),
+            ("decision_criterion_kinds", "decision_criterion_kind"),
+            ("alternative_comparison_statuses", "alternative_comparison_status"),
+            ("price_comparison_statuses", "price_comparison_status"),
+            ("clarification_recipients", "clarification_recipient"),
+            ("clarification_priorities", "clarification_priority"),
+            ("clarification_statuses", "clarification_status"),
+            ("management_scenario_statuses", "management_scenario_status"),
+            ("challenge_review_statuses", "challenge_review_status"),
         ):
             with self.subTest(contract_field=contract_field):
                 values = contract[contract_field]

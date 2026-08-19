@@ -1177,9 +1177,22 @@ def validate_review_contract(
     site_verification_ids: list[str] = []
     acceptance_plan_ids: list[str] = []
     priority_risk_ids: list[str] = []
+    baseline_scope_requirement_ids: list[str] = []
+    as_is_match_fact_ids: list[str] = []
+    context_conflict_ids: list[str] = []
+    decision_criterion_ids: list[str] = []
+    alternative_comparison_ids: list[str] = []
+    price_comparison_ids: list[str] = []
+    clarification_ids: list[str] = []
+    coordination_run_ids: list[str] = []
+    management_scenario_ids: list[str] = []
+    challenge_completed = False
     site_statuses: list[str] = []
     contractor_statuses: list[str] = []
     cost_contract_blocked = False
+    context_contract_blocked = False
+    clarification_contract_blocked = False
+    management_contract_blocked = False
 
     if current_contract:
         if not str(review.get("additional_analysis_summary", "")).strip():
@@ -1366,6 +1379,266 @@ def validate_review_contract(
         if not str(review.get("risk_summary", "")).strip():
             errors.append("risk_summary is required for the current contract")
 
+        series_id = str(review.get("review_series_id", "")).strip()
+        revision = review.get("review_revision")
+        if not series_id:
+            errors.append("review_series_id is required for the current contract")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            errors.append("review_revision must be a positive integer")
+        if revision == 1 and str(review.get("supersedes_proposal_review_id", "")).strip():
+            errors.append("review revision 1 must not supersede another review")
+
+        context_mode = review.get("context_mode")
+        if context_mode not in PROPOSAL_CONTRACT["proposal_context_modes"]:
+            errors.append("ProposalReview has an unknown or missing context_mode")
+        as_is_snapshot_id = str(review.get("as_is_snapshot_id", "")).strip()
+        as_is_scope = str(review.get("as_is_applicability_scope", "")).strip()
+        if context_mode in {"as_is_and_baseline", "as_is_only"}:
+            if not as_is_snapshot_id or not as_is_scope:
+                errors.append("as-is context requires as_is_snapshot_id and as_is_applicability_scope")
+        elif as_is_snapshot_id or as_is_scope:
+            errors.append("context without as-is must not claim an as-is snapshot or scope")
+        if context_mode in {"as_is_and_baseline", "baseline_only"}:
+            if review.get("baseline_assessment_mode") != "accepted_baseline":
+                errors.append("baseline context requires accepted_baseline mode")
+        elif review.get("baseline_assessment_mode") == "accepted_baseline":
+            errors.append("accepted_baseline mode requires a baseline context mode")
+        context_limitations = strings(review.get("context_limitations", []), "context_limitations")
+        if context_mode == "documents_only" and not context_limitations:
+            errors.append("documents_only context must state its limitations")
+        target_entity_ids = strings(review.get("target_entity_ids", []), "target_entity_ids")
+        if any(identifier not in registered_ids for identifier in target_entity_ids):
+            errors.append("target_entity_ids contains an unknown registered entity")
+
+        baseline_scope = objects("baseline_scope_classifications")
+        for item in baseline_scope:
+            requirement_id = str(item.get("requirement_id", "")).strip()
+            baseline_scope_requirement_ids.append(requirement_id)
+            if not requirement_id or requirement_id not in registered_ids:
+                errors.append("baseline scope classification refers to an unknown requirement")
+            if item.get("status") not in PROPOSAL_CONTRACT["baseline_scope_statuses"]:
+                errors.append(f"baseline scope classification {requirement_id or 'without ID'} has an unknown status")
+            if not str(item.get("rationale", "")).strip():
+                errors.append(f"baseline scope classification {requirement_id or 'without ID'} lacks rationale")
+            validate_sources(item.get("source_ids", []), f"baseline scope classification {requirement_id or 'without ID'}")
+        if len(baseline_scope_requirement_ids) != len(set(baseline_scope_requirement_ids)) or any(
+            not value for value in baseline_scope_requirement_ids
+        ):
+            errors.append("baseline_scope_classifications require unique non-empty requirement IDs")
+
+        as_is_matches = objects("as_is_fact_matches")
+        for item in as_is_matches:
+            fact_id = str(item.get("fact_id", "")).strip()
+            as_is_match_fact_ids.append(fact_id)
+            if not fact_id or fact_id not in registered_ids:
+                errors.append("as-is fact match refers to an unknown fact")
+            if item.get("status") not in PROPOSAL_CONTRACT["as_is_match_statuses"]:
+                errors.append(f"as-is fact match {fact_id or 'without ID'} has an unknown status")
+            strings(item.get("quote_item_ids", []), f"as-is fact match {fact_id} quote_item_ids")
+            strings(item.get("alternative_ids", []), f"as-is fact match {fact_id} alternative_ids")
+            if not str(item.get("notes", "")).strip():
+                errors.append(f"as-is fact match {fact_id or 'without ID'} lacks notes")
+            validate_sources(item.get("source_ids", []), f"as-is fact match {fact_id or 'without ID'}")
+        if len(as_is_match_fact_ids) != len(set(as_is_match_fact_ids)) or any(not value for value in as_is_match_fact_ids):
+            errors.append("as_is_fact_matches require unique non-empty fact IDs")
+
+        context_conflicts = objects("context_conflicts")
+        for item in context_conflicts:
+            conflict_id = str(item.get("conflict_id", "")).strip()
+            context_conflict_ids.append(conflict_id)
+            status = item.get("status")
+            if status not in PROPOSAL_CONTRACT["context_conflict_statuses"]:
+                errors.append(f"context conflict {conflict_id or 'without ID'} has an unknown status")
+            for field in ("statement", "impact", "resolution"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"context conflict {conflict_id or 'without ID'} lacks {field}")
+            strings(item.get("as_is_fact_ids", []), f"context conflict {conflict_id} as_is_fact_ids")
+            strings(item.get("baseline_requirement_ids", []), f"context conflict {conflict_id} baseline_requirement_ids")
+            strings(item.get("quote_item_ids", []), f"context conflict {conflict_id} quote_item_ids")
+            if not isinstance(item.get("blocks_contract"), bool):
+                errors.append(f"context conflict {conflict_id or 'without ID'} requires blocks_contract")
+            elif status == "open" and item.get("blocks_contract") is True:
+                context_contract_blocked = True
+            validate_sources(item.get("source_ids", []), f"context conflict {conflict_id or 'without ID'}")
+        if len(context_conflict_ids) != len(set(context_conflict_ids)) or any(not value for value in context_conflict_ids):
+            errors.append("context_conflicts require unique non-empty conflict IDs")
+
+        criteria = objects("decision_criteria")
+        for item in criteria:
+            criterion_id = str(item.get("criterion_id", "")).strip()
+            decision_criterion_ids.append(criterion_id)
+            if not criterion_id or not str(item.get("title", "")).strip() or not str(item.get("rationale", "")).strip():
+                errors.append("decision criterion requires criterion_id, title and rationale")
+            if item.get("kind") not in PROPOSAL_CONTRACT["decision_criterion_kinds"]:
+                errors.append(f"decision criterion {criterion_id or 'without ID'} has an unknown kind")
+            weight = item.get("weight")
+            if weight is not None and (isinstance(weight, bool) or not isinstance(weight, (int, float)) or weight < 0):
+                errors.append(f"decision criterion {criterion_id or 'without ID'} has an invalid weight")
+            validate_sources(item.get("source_ids", []), f"decision criterion {criterion_id or 'without ID'}")
+        if not criteria or len(decision_criterion_ids) != len(set(decision_criterion_ids)) or any(
+            not value for value in decision_criterion_ids
+        ):
+            errors.append("decision_criteria require unique non-empty criteria")
+
+        comparison_axes = [value["axis_id"] for value in PROPOSAL_CONTRACT["alternative_comparison_axes"]]
+        alternative_comparisons = objects("alternative_comparisons")
+        for item in alternative_comparisons:
+            comparison_id = str(item.get("comparison_id", "")).strip()
+            alternative_id = str(item.get("alternative_id", "")).strip()
+            alternative_comparison_ids.append(comparison_id)
+            if not comparison_id or alternative_id not in known_alternatives:
+                errors.append("alternative comparison requires a known alternative and comparison_id")
+            results = item.get("axis_results")
+            if not isinstance(results, list) or any(not isinstance(value, dict) for value in results):
+                errors.append(f"alternative comparison {comparison_id or 'without ID'} axis_results must be objects")
+                results = []
+            result_axes: list[str] = []
+            for result in results:
+                axis_id = str(result.get("axis_id", "")).strip()
+                result_axes.append(axis_id)
+                if result.get("status") not in PROPOSAL_CONTRACT["alternative_comparison_statuses"]:
+                    errors.append(f"alternative comparison {comparison_id} axis {axis_id} has an unknown status")
+                if not str(result.get("result", "")).strip():
+                    errors.append(f"alternative comparison {comparison_id} axis {axis_id} lacks result")
+                strings(result.get("blocking_inputs", []), f"alternative comparison {comparison_id} axis {axis_id} blocking_inputs")
+                validate_sources(result.get("source_ids", []), f"alternative comparison {comparison_id} axis {axis_id}")
+            if sorted(result_axes) != sorted(comparison_axes) or len(result_axes) != len(set(result_axes)):
+                errors.append(f"alternative comparison {comparison_id or 'without ID'} does not cover every axis exactly once")
+        if not alternative_comparisons or len(alternative_comparison_ids) != len(set(alternative_comparison_ids)) or any(
+            not value for value in alternative_comparison_ids
+        ):
+            errors.append("alternative_comparisons require unique non-empty comparison IDs")
+
+        price_comparisons = objects("price_comparisons")
+        for item in price_comparisons:
+            comparison_id = str(item.get("comparison_id", "")).strip()
+            price_comparison_ids.append(comparison_id)
+            if not comparison_id or not str(item.get("subject_id", "")).strip():
+                errors.append("price comparison requires comparison_id and subject_id")
+            if item.get("status") not in PROPOSAL_CONTRACT["price_comparison_statuses"]:
+                errors.append(f"price comparison {comparison_id or 'without ID'} has an unknown status")
+            for field in (
+                "scope_basis", "quantity_basis", "tax_context", "delivery_context", "installation_context",
+                "observed_at", "region",
+            ):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"price comparison {comparison_id or 'without ID'} lacks {field}")
+            price_ids = strings(item.get("price_observation_ids", []), f"price comparison {comparison_id} price_observation_ids")
+            if any(identifier not in registered_ids for identifier in price_ids):
+                errors.append(f"price comparison {comparison_id or 'without ID'} refers to an unknown PriceObservation")
+            limitations = strings(item.get("limitations", []), f"price comparison {comparison_id} limitations")
+            if item.get("status") in {"comparable", "partially_comparable"} and not price_ids:
+                errors.append(f"price comparison {comparison_id or 'without ID'} has no PriceObservation")
+            if item.get("status") in {"not_comparable", "unknown"} and not limitations:
+                errors.append(f"price comparison {comparison_id or 'without ID'} must explain its limitations")
+            validate_sources(item.get("source_ids", []), f"price comparison {comparison_id or 'without ID'}")
+        if not price_comparisons or len(price_comparison_ids) != len(set(price_comparison_ids)) or any(
+            not value for value in price_comparison_ids
+        ):
+            errors.append("price_comparisons require unique non-empty comparison IDs")
+
+        clarifications = objects("clarification_requests")
+        mapped_gap_ids: list[str] = []
+        rendered_contractor_questions: list[str] = []
+        for item in clarifications:
+            clarification_id = str(item.get("clarification_id", "")).strip()
+            clarification_ids.append(clarification_id)
+            gap_id = str(item.get("information_gap_id", "")).strip()
+            mapped_gap_ids.append(gap_id)
+            recipient = item.get("recipient")
+            priority = item.get("priority")
+            status = item.get("status")
+            if not clarification_id or gap_id not in registered_ids:
+                errors.append("clarification request requires clarification_id and a known InformationGap")
+            if recipient not in PROPOSAL_CONTRACT["clarification_recipients"]:
+                errors.append(f"clarification request {clarification_id or 'without ID'} has an unknown recipient")
+            if priority not in PROPOSAL_CONTRACT["clarification_priorities"]:
+                errors.append(f"clarification request {clarification_id or 'without ID'} has an unknown priority")
+            if status not in PROPOSAL_CONTRACT["clarification_statuses"]:
+                errors.append(f"clarification request {clarification_id or 'without ID'} has an unknown status")
+            for field in ("question", "requested_evidence", "answer_format"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"clarification request {clarification_id or 'without ID'} lacks {field}")
+            blocked = strings(
+                item.get("blocked_conclusions", []),
+                f"clarification request {clarification_id} blocked_conclusions",
+                allow_empty=False,
+            )
+            response_sources = strings(
+                item.get("response_source_ids", []),
+                f"clarification request {clarification_id} response_source_ids",
+            )
+            if any(identifier not in registered_ids for identifier in response_sources):
+                errors.append(f"clarification request {clarification_id or 'without ID'} has an unknown response source")
+            if status in {"answered", "verified"} and not response_sources:
+                errors.append(f"clarification request {clarification_id or 'without ID'} is answered without a response source")
+            if status in {"verified", "closed_not_resolved"} and not str(item.get("resolution", "")).strip():
+                errors.append(f"clarification request {clarification_id or 'without ID'} lacks resolution")
+            if status in {"open", "answered"} and priority in {"critical", "high"} and blocked:
+                clarification_contract_blocked = True
+            question = str(item.get("question", "")).strip()
+            if recipient in {"contractor", "supplier"} and question:
+                rendered_contractor_questions.append(question)
+            validate_sources(item.get("source_ids", []), f"clarification request {clarification_id or 'without ID'}")
+        linked_gap_ids = strings(review.get("information_gap_ids", []), "information_gap_ids")
+        if sorted(mapped_gap_ids) != sorted(linked_gap_ids) or len(mapped_gap_ids) != len(set(mapped_gap_ids)):
+            errors.append("clarification_requests must cover every linked InformationGap exactly once")
+        legacy_questions = strings(review.get("contractor_questions", []), "contractor_questions")
+        if sorted(legacy_questions) != sorted(rendered_contractor_questions):
+            errors.append("contractor_questions must be derived from contractor and supplier clarification requests")
+        if len(clarification_ids) != len(set(clarification_ids)) or any(not value for value in clarification_ids):
+            errors.append("clarification_requests require unique non-empty IDs")
+
+        coordination_run_ids = strings(review.get("coordination_run_ids", []), "coordination_run_ids")
+        if any(identifier not in registered_ids for identifier in coordination_run_ids):
+            errors.append("coordination_run_ids contains an unknown CoordinationRun")
+
+        management_scenarios = objects("management_scenarios")
+        for item in management_scenarios:
+            scenario_id = str(item.get("scenario_id", "")).strip()
+            alternative_id = str(item.get("alternative_id", "")).strip()
+            management_scenario_ids.append(scenario_id)
+            status = item.get("status")
+            if not scenario_id or alternative_id not in known_alternatives:
+                errors.append("management scenario requires scenario_id and a known Alternative")
+            if status not in PROPOSAL_CONTRACT["management_scenario_statuses"]:
+                errors.append(f"management scenario {scenario_id or 'without ID'} has an unknown status")
+            for field in ("cost_summary", "schedule_summary"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"management scenario {scenario_id or 'without ID'} lacks {field}")
+            blockers = strings(item.get("blocking_inputs", []), f"management scenario {scenario_id} blocking_inputs")
+            if status == "blocked" and not blockers:
+                errors.append(f"management scenario {scenario_id or 'without ID'} is blocked without blocking_inputs")
+            cost_plan_id = str(item.get("cost_plan_id", "")).strip()
+            schedule_plan_id = str(item.get("schedule_plan_id", "")).strip()
+            if status == "complete" and (not cost_plan_id or not schedule_plan_id):
+                errors.append(f"management scenario {scenario_id or 'without ID'} complete without CostPlan and SchedulePlan")
+            if alternative_id == str(review.get("foreman_assessment", {}).get("preferred_alternative_id", "")).strip():
+                management_contract_blocked = status != "complete"
+            for field in ("cost_plan_id", "schedule_plan_id", "change_impact_assessment_id"):
+                linked_id = str(item.get(field, "")).strip()
+                if linked_id and linked_id not in registered_ids:
+                    errors.append(f"management scenario {scenario_id or 'without ID'} has an unknown {field}")
+            validate_sources(item.get("source_ids", []), f"management scenario {scenario_id or 'without ID'}")
+        if not management_scenarios or len(management_scenario_ids) != len(set(management_scenario_ids)) or any(
+            not value for value in management_scenario_ids
+        ):
+            errors.append("management_scenarios require unique non-empty scenario IDs")
+
+        challenge = review.get("challenge_review")
+        if not isinstance(challenge, dict):
+            errors.append("challenge_review must be an object")
+        else:
+            for field in ("recommendation_under_test", "strongest_counterargument", "conclusion"):
+                if not str(challenge.get(field, "")).strip():
+                    errors.append(f"challenge_review lacks {field}")
+            if challenge.get("status") not in PROPOSAL_CONTRACT["challenge_review_statuses"]:
+                errors.append("challenge_review has an unknown status")
+            strings(challenge.get("failure_modes", []), "challenge_review.failure_modes", allow_empty=False)
+            strings(challenge.get("decision_changing_inputs", []), "challenge_review.decision_changing_inputs", allow_empty=False)
+            validate_sources(challenge.get("source_ids", []), "challenge_review")
+            challenge_completed = True
+
     if not isinstance(manifest, dict):
         errors.append("completion_manifest must be an object")
     else:
@@ -1383,7 +1656,18 @@ def validate_review_contract(
                 ("site_verification_ids", site_verification_ids),
                 ("acceptance_plan_ids", acceptance_plan_ids),
                 ("priority_risk_ids", priority_risk_ids),
+                ("baseline_scope_requirement_ids", baseline_scope_requirement_ids),
+                ("as_is_match_fact_ids", as_is_match_fact_ids),
+                ("context_conflict_ids", context_conflict_ids),
+                ("decision_criterion_ids", decision_criterion_ids),
+                ("alternative_comparison_ids", alternative_comparison_ids),
+                ("price_comparison_ids", price_comparison_ids),
+                ("clarification_ids", clarification_ids),
+                ("coordination_run_ids", coordination_run_ids),
+                ("management_scenario_ids", management_scenario_ids),
             ])
+            if manifest.get("challenge_review_completed") is not challenge_completed:
+                errors.append("completion_manifest.challenge_review_completed does not match challenge_review")
         for field, expected in manifest_fields:
             value = manifest.get(field)
             if (
@@ -1404,6 +1688,8 @@ def validate_review_contract(
         if readiness == "ready_for_contract":
             if review.get("baseline_assessment_mode") != "accepted_baseline":
                 errors.append("ready_for_contract requires an accepted baseline snapshot")
+            if review.get("context_mode") == "documents_only":
+                errors.append("ready_for_contract requires an as-is or baseline context")
             if foreman.get("verdict") != "conditionally_recommended":
                 errors.append("ready_for_contract requires a conditionally_recommended foreman verdict")
             if cost_contract_blocked:
@@ -1412,6 +1698,14 @@ def validate_review_contract(
                 errors.append("ready_for_contract has open site verification")
             if any(status not in ready_statuses for status in contractor_statuses):
                 errors.append("ready_for_contract has incomplete contractor assessment")
+            if context_contract_blocked:
+                errors.append("ready_for_contract has an unresolved blocking context conflict")
+            if clarification_contract_blocked:
+                errors.append("ready_for_contract has an open critical or high-priority clarification")
+            if management_contract_blocked:
+                errors.append("ready_for_contract has a blocked preferred management scenario")
+        if isinstance(review.get("challenge_review"), dict) and review["challenge_review"].get("status") == "insufficient_evidence":
+            errors.append("ready review has insufficient evidence after the challenge pass")
     elif current_contract:
         foreman = review.get("foreman_assessment", {})
         if isinstance(foreman, dict) and foreman.get("decision_readiness") in {
@@ -1612,6 +1906,21 @@ def validate_proposal_reviews(
     quotes = records_by_id(jsonl_records["quotes.jsonl"], "quote_id")
     quote_items = records_by_id(jsonl_records["quote_items.jsonl"], "quote_item_id")
     baseline_snapshots = records_by_id(jsonl_records["baseline_snapshots.jsonl"], "baseline_snapshot_id")
+    as_is_snapshots = records_by_id(jsonl_records["as_is_snapshots.jsonl"], "as_is_snapshot_id")
+    proposal_reviews = records_by_id(jsonl_records["proposal_reviews.jsonl"], "proposal_review_id")
+    coordination_runs = records_by_id(jsonl_records["coordination_runs.jsonl"], "coordination_run_id")
+    price_observations = records_by_id(jsonl_records["price_observations.jsonl"], "price_observation_id")
+    cost_plans = records_by_id(jsonl_records["cost_plans.jsonl"], "cost_plan_id")
+    schedule_plans = records_by_id(jsonl_records["schedule_plans.jsonl"], "schedule_plan_id")
+    change_impacts = records_by_id(
+        jsonl_records["change_impact_assessments.jsonl"], "change_impact_assessment_id"
+    )
+    superseded_as_is_ids = {
+        str(value.get("supersedes_as_is_snapshot_id", "")).strip()
+        for value in as_is_snapshots.values()
+        if str(value.get("supersedes_as_is_snapshot_id", "")).strip()
+    }
+    current_as_is_ids = set(as_is_snapshots) - superseded_as_is_ids
     compliance_assessments = records_by_id(
         jsonl_records["compliance_assessments.jsonl"], "compliance_assessment_id"
     )
@@ -1961,6 +2270,143 @@ def validate_proposal_reviews(
         alternatives = id_list(review, "alternative_ids", location, warnings)
         if any(value not in jsonl_ids["alternatives.jsonl"] for value in alternatives):
             warnings.append(f"{location}: unknown alternative link")
+        if current_contract:
+            revision = review.get("review_revision")
+            series_id = str(review.get("review_series_id", "")).strip()
+            supersedes_review_id = str(review.get("supersedes_proposal_review_id", "")).strip()
+            same_series = [
+                value for identifier, value in proposal_reviews.items()
+                if value.get("review_series_id") == series_id and identifier != review.get("proposal_review_id")
+            ]
+            if any(value.get("review_revision") == revision for value in same_series):
+                warnings.append(f"{location}: duplicate review_revision in review_series_id")
+            if isinstance(revision, int) and revision > 1:
+                prior = proposal_reviews.get(supersedes_review_id)
+                if (
+                    prior is None
+                    or prior.get("review_series_id") != series_id
+                    or prior.get("review_revision") != revision - 1
+                ):
+                    warnings.append(f"{location}: revision does not supersede its immediate predecessor")
+
+            context_mode = review.get("context_mode")
+            as_is_snapshot_id = str(review.get("as_is_snapshot_id", "")).strip()
+            as_is_snapshot = as_is_snapshots.get(as_is_snapshot_id)
+            as_is_matches = review.get("as_is_fact_matches", [])
+            if context_mode in {"as_is_and_baseline", "as_is_only"}:
+                if as_is_snapshot is None or as_is_snapshot_id not in current_as_is_ids:
+                    warnings.append(f"{location}: as-is context does not use the current AsIsSnapshot")
+                else:
+                    snapshot_fact_ids = id_list(as_is_snapshot, "source_fact_ids", location, warnings)
+                    matched_fact_ids = [
+                        str(value.get("fact_id", "")).strip()
+                        for value in as_is_matches
+                        if isinstance(value, dict)
+                    ]
+                    if sorted(matched_fact_ids) != sorted(snapshot_fact_ids):
+                        warnings.append(f"{location}: every AsIsSnapshot fact must be classified exactly once")
+                    snapshot_entity_ids: set[str] = set()
+                    for field in (
+                        "site_ids", "zone_ids", "physical_element_ids", "system_ids", "asset_ids", "route_ids",
+                        "asset_event_ids", "condition_assessment_ids",
+                    ):
+                        snapshot_entity_ids.update(id_list(as_is_snapshot, field, location, warnings))
+                    target_ids = set(id_list(review, "target_entity_ids", location, warnings))
+                    if target_ids - snapshot_entity_ids:
+                        warnings.append(f"{location}: target_entity_ids fall outside the AsIsSnapshot")
+                    if snapshot_entity_ids and not target_ids:
+                        warnings.append(f"{location}: as-is context does not select target entities")
+            elif isinstance(as_is_matches, list) and as_is_matches:
+                warnings.append(f"{location}: review without as-is context contains as_is_fact_matches")
+
+            baseline_scope = review.get("baseline_scope_classifications", [])
+            if baseline_mode == "accepted_baseline" and baseline_snapshot is not None:
+                snapshot_requirement_ids = id_list(baseline_snapshot, "requirement_ids", location, warnings)
+                classified_ids = [
+                    str(value.get("requirement_id", "")).strip()
+                    for value in baseline_scope
+                    if isinstance(value, dict)
+                ]
+                if sorted(classified_ids) != sorted(snapshot_requirement_ids):
+                    warnings.append(f"{location}: every BaselineSnapshot requirement must be scoped exactly once")
+                applicable_ids = {
+                    str(value.get("requirement_id", "")).strip()
+                    for value in baseline_scope
+                    if isinstance(value, dict) and value.get("status") == "applicable"
+                }
+                if applicable_ids != set(baseline_ids):
+                    warnings.append(f"{location}: applicable baseline scope differs from baseline_requirement_ids")
+            elif isinstance(baseline_scope, list) and baseline_scope:
+                warnings.append(f"{location}: review without accepted baseline contains baseline scope classifications")
+
+            comparison_alternative_ids = [
+                str(value.get("alternative_id", "")).strip()
+                for value in review.get("alternative_comparisons", [])
+                if isinstance(value, dict)
+            ]
+            if set(comparison_alternative_ids) != set(alternatives) or len(comparison_alternative_ids) != len(
+                set(comparison_alternative_ids)
+            ):
+                warnings.append(f"{location}: every Alternative must have exactly one comparison matrix")
+            scenario_alternative_ids = [
+                str(value.get("alternative_id", "")).strip()
+                for value in review.get("management_scenarios", [])
+                if isinstance(value, dict)
+            ]
+            if set(scenario_alternative_ids) != set(alternatives) or len(scenario_alternative_ids) != len(
+                set(scenario_alternative_ids)
+            ):
+                warnings.append(f"{location}: every Alternative must have exactly one management scenario")
+
+            quote_id = str(review.get("quote_id", "")).strip()
+            for comparison in review.get("price_comparisons", []):
+                if not isinstance(comparison, dict):
+                    continue
+                subject_id = str(comparison.get("subject_id", "")).strip()
+                if subject_id != quote_id and subject_id not in alternatives:
+                    warnings.append(f"{location}: price comparison has an unrelated subject")
+                for observation_id in id_list(comparison, "price_observation_ids", location, warnings):
+                    if observation_id not in price_observations:
+                        warnings.append(f"{location}: price comparison links an unknown PriceObservation")
+
+            for scenario in review.get("management_scenarios", []):
+                if not isinstance(scenario, dict):
+                    continue
+                scenario_status = scenario.get("status")
+                cost_plan_id = str(scenario.get("cost_plan_id", "")).strip()
+                schedule_plan_id = str(scenario.get("schedule_plan_id", "")).strip()
+                change_id = str(scenario.get("change_impact_assessment_id", "")).strip()
+                cost_plan = cost_plans.get(cost_plan_id)
+                schedule_plan = schedule_plans.get(schedule_plan_id)
+                if cost_plan_id and cost_plan is None:
+                    warnings.append(f"{location}: management scenario links an unknown CostPlan")
+                if schedule_plan_id and schedule_plan is None:
+                    warnings.append(f"{location}: management scenario links an unknown SchedulePlan")
+                if change_id and change_id not in change_impacts:
+                    warnings.append(f"{location}: management scenario links an unknown ChangeImpactAssessment")
+                if scenario_status == "complete":
+                    if cost_plan is None or cost_plan.get("status") != "ready_for_baseline":
+                        warnings.append(f"{location}: complete management scenario requires a ready CostPlan")
+                    if schedule_plan is None or schedule_plan.get("status") != "ready_for_baseline":
+                        warnings.append(f"{location}: complete management scenario requires a ready SchedulePlan")
+                    if baseline_mode == "accepted_baseline" and baseline_snapshot_id:
+                        if cost_plan is not None and cost_plan.get("baseline_snapshot_id") != baseline_snapshot_id:
+                            warnings.append(f"{location}: management scenario CostPlan uses another baseline")
+                        if schedule_plan is not None and schedule_plan.get("baseline_snapshot_id") != baseline_snapshot_id:
+                            warnings.append(f"{location}: management scenario SchedulePlan uses another baseline")
+
+            linked_coordination_ids = id_list(review, "coordination_run_ids", location, warnings)
+            for coordination_id in linked_coordination_ids:
+                coordination = coordination_runs.get(coordination_id)
+                if coordination is None or coordination.get("status") != "complete":
+                    warnings.append(f"{location}: coordination_run_ids contains an incomplete run")
+            package_ids = id_list(review, "project_package_ids", location, warnings)
+            if len(package_ids) > 1 and not any(
+                set(package_ids).issubset(set(coordination_runs[value].get("package_ids", [])))
+                for value in linked_coordination_ids
+                if value in coordination_runs
+            ):
+                warnings.append(f"{location}: linked packages have no complete joint CoordinationRun")
         for error in validate_review_contract(
             review,
             registered_ids,
