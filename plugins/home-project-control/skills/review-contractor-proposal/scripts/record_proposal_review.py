@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MANAGE_SCRIPTS = SCRIPT_DIR.parents[1] / "manage-project-evidence" / "scripts"
 sys.path.insert(0, str(MANAGE_SCRIPTS))
 
-from audit_project import audit, validate_review_contract  # noqa: E402
+from audit_project import PROPOSAL_CONTRACT, audit, validate_review_contract  # noqa: E402
 from inspect_project import is_linklike, require_ready_project  # noqa: E402
 
 
@@ -381,6 +381,7 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         searches = review.get("search_runs")
         if not isinstance(searches, list) or any(not isinstance(value, dict) for value in searches):
             raise ValueError(f"ProposalReview {review_id}.search_runs must be an array")
+        comparable_candidate_ids: set[str] = set()
         for search in searches:
             search_id = str(search.get("search_run_id", "")).strip()
             if not search_id or search.get("status") not in DIMENSIONS["search_run_status"]:
@@ -395,6 +396,59 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             candidates = string_list(search.get("candidate_contractor_ids", []), f"ProposalReview {review_id} search candidates")
             if any(identifier not in contractors for identifier in candidates):
                 raise ValueError(f"ProposalReview {review_id} search refers to an unknown contractor")
+            supplier_candidates = string_list(
+                search.get("candidate_supplier_ids", []),
+                f"ProposalReview {review_id} search supplier candidates",
+            )
+            if any(identifier not in suppliers for identifier in supplier_candidates):
+                raise ValueError(f"ProposalReview {review_id} search refers to an unknown supplier")
+            candidate_assessments = search.get("candidate_assessments")
+            if not isinstance(candidate_assessments, list) or any(
+                not isinstance(value, dict) for value in candidate_assessments
+            ):
+                raise ValueError(f"ProposalReview {review_id} search candidate_assessments must be an array of objects")
+            assessed_ids: list[str] = []
+            for number, assessment in enumerate(candidate_assessments, 1):
+                counterparty_id = str(assessment.get("counterparty_id", "")).strip()
+                counterparty_kind = str(assessment.get("counterparty_kind", "")).strip()
+                assessed_ids.append(counterparty_id)
+                if counterparty_kind == "contractor":
+                    if counterparty_id not in candidates:
+                        raise ValueError(
+                            f"ProposalReview {review_id} candidate assessment {number} refers to an unlisted contractor"
+                        )
+                elif counterparty_kind == "supplier":
+                    if counterparty_id not in supplier_candidates:
+                        raise ValueError(
+                            f"ProposalReview {review_id} candidate assessment {number} refers to an unlisted supplier"
+                        )
+                else:
+                    raise ValueError(f"ProposalReview {review_id} candidate assessment {number} has an unknown kind")
+                comparability_status = assessment.get("comparability_status")
+                if comparability_status not in PROPOSAL_CONTRACT["candidate_comparability_statuses"]:
+                    raise ValueError(
+                        f"ProposalReview {review_id} candidate assessment {number} has an unknown comparability status"
+                    )
+                if not str(assessment.get("basis", "")).strip():
+                    raise ValueError(f"ProposalReview {review_id} candidate assessment {number} lacks a basis")
+                string_list(
+                    assessment.get("missing_information", []),
+                    f"ProposalReview {review_id} candidate assessment {number}.missing_information",
+                )
+                string_list(
+                    assessment.get("source_urls", []),
+                    f"ProposalReview {review_id} candidate assessment {number}.source_urls",
+                    allow_empty=False,
+                )
+                if (
+                    search.get("status") in {"complete", "partial"}
+                    and comparability_status in {"potentially_comparable", "requires_quote"}
+                    and counterparty_id
+                ):
+                    comparable_candidate_ids.add(counterparty_id)
+            listed_ids = [*candidates, *supplier_candidates]
+            if sorted(assessed_ids) != sorted(listed_ids) or len(assessed_ids) != len(set(assessed_ids)):
+                raise ValueError(f"ProposalReview {review_id} every candidate needs exactly one comparability assessment")
 
         finding_ids = string_list(review.get("finding_ids", []), f"ProposalReview {review_id}.finding_ids")
         if any(identifier not in known["findings"] for identifier in finding_ids):
@@ -402,9 +456,41 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         alternative_ids = string_list(review.get("alternative_ids", []), f"ProposalReview {review_id}.alternative_ids")
         if any(identifier not in known["alternatives"] for identifier in alternative_ids):
             raise ValueError(f"ProposalReview {review_id} refers to an unknown alternative")
-        contract_errors = validate_review_contract(review, registered_ids, set(known["alternatives"]))
+        manifest = review.get("completion_manifest")
+        if not isinstance(manifest, dict) or manifest.get("contract_version") != PROPOSAL_CONTRACT["contract_version"]:
+            raise ValueError(
+                f"ProposalReview {review_id} must use current contract version {PROPOSAL_CONTRACT['contract_version']}"
+            )
+        contract_errors = validate_review_contract(
+            review,
+            registered_ids,
+            set(known["alternatives"]),
+            set(known["findings"]),
+        )
         if contract_errors:
             raise ValueError(f"ProposalReview {review_id} contract failed: " + "; ".join(contract_errors))
+        scoped_quote_items: list[str] = []
+        scope_items = review.get("scope_boundary_matrix", [])
+        if not isinstance(scope_items, list):
+            raise ValueError(f"ProposalReview {review_id}.scope_boundary_matrix must be an array")
+        for scope_number, scope in enumerate(scope_items, 1):
+            if not isinstance(scope, dict):
+                continue
+            linked_quote_items = string_list(
+                scope.get("quote_item_ids", []),
+                f"ProposalReview {review_id} scope {scope_number}.quote_item_ids",
+            )
+            linked_requirements = string_list(
+                scope.get("requirement_ids", []),
+                f"ProposalReview {review_id} scope {scope_number}.requirement_ids",
+            )
+            if any(identifier not in quote_item_ids for identifier in linked_quote_items):
+                raise ValueError(f"ProposalReview {review_id} scope boundary links an item from another quote")
+            if any(identifier not in requirements for identifier in linked_requirements):
+                raise ValueError(f"ProposalReview {review_id} scope boundary links an unknown requirement")
+            scoped_quote_items.extend(linked_quote_items)
+        if set(scoped_quote_items) != quote_item_ids or len(scoped_quote_items) != len(set(scoped_quote_items)):
+            raise ValueError(f"ProposalReview {review_id} scope boundary must classify every quote item exactly once")
         blockers = string_list(review.get("essential_blockers", []), f"ProposalReview {review_id}.essential_blockers")
         string_list(review.get("contractor_questions", []), f"ProposalReview {review_id}.contractor_questions")
         if review.get("status") == "ready_for_owner":
@@ -418,6 +504,16 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
                 raise ValueError(f"ProposalReview {review_id} cannot be ready while coverage or blockers are incomplete")
             if not searches or not any(search.get("status") in {"complete", "partial"} for search in searches):
                 raise ValueError(f"ProposalReview {review_id} cannot be ready without a performed external search")
+            contractor_id = str(quote.get("contractor_id", "")).strip()
+            supplier_id = str(quote.get("supplier_id", "")).strip()
+            quoted_counterparty_id = contractor_id or supplier_id
+            distinct_counterparty_found = any(
+                candidate != quoted_counterparty_id for candidate in comparable_candidate_ids
+            )
+            if not distinct_counterparty_found:
+                raise ValueError(
+                    f"ProposalReview {review_id} cannot be ready without a distinct comparable contractor or supplier candidate"
+                )
 
     return additions, existing
 
