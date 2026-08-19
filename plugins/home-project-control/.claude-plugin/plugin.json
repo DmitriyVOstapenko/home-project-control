@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "home-project-control",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Проверяемая локальная база знаний и контроль жизненного цикла физических объектов, оборудования, работ и расходов.",
   "author": {
     "name": "Dmitriy",

@@ -10,7 +10,13 @@
 
 ## Контекст приёма документа
 
-`ingest_documents.py` может добавить к записи в `documents.json` массив `intake_contexts`. Каждый элемент хранит `intake_id`, дату, имя входного файла, описание пользователя, `declared_by: user` и `verification_status: unreviewed`. Эта запись фиксирует контекс передачи, но не подтверждает содержание, статус или актуальность файла.
+`ingest_documents.py` добавляет к записи в `documents.json` массив `intake_contexts`. Каждый элемент хранит `intake_id`, общий `intake_batch_id`, дату, имя входного файла, описание пользователя, `declared_by: user` и `verification_status: unreviewed`. `DocumentIntakeBatch` связывает весь атомарно принятый пакет с итоговыми `document_id`, SHA-256 и относительными путями. Эти записи фиксируют контекст передачи, но не подтверждают содержание, статус или актуальность файла.
+
+## Состояние «как есть» и запрос пользователя
+
+`AsIsSnapshot` — неизменяемый версионируемый снимок доказанного и явно неизвестного состояния объекта на дату. Он содержит область, точные версии документов, `source_fact_ids`, связанные площадки, зоны, элементы, системы, активы, трассы, события, оценки состояния, `InformationGap` и ограничения. Каждая включённая версия документа должна иметь завершённые `ReadingRun` и `FactExtractionRun`, а каждый документальный факт — входить своей точной версией в снимок. Его принятие оформляется `OwnerDecision` с `decision_type: as_is_snapshot_acceptance`; владелец принимает снимок как рабочий контекст, но это решение не повышает `verification_status` исходных фактов.
+
+`AnalysisRequest` сохраняет содержательный запрос независимо от задачи Codex или сессии Claude Code. Каждая новая ревизия получает новый `analysis_request_id`, тот же `request_series_id`, следующий `request_version`, дату `revised_at` и ссылку `supersedes_analysis_request_id`, сохраняя исходные `request_text`, `request_type` и `requested_at`. Она фиксирует ожидаемые результаты, применённые снимки «как есть» и базовой линии, документы, пакеты, пробелы и сохранённые результаты. После поступления новых данных возобновляется текущая ревизия, а не формулируется новый несвязанный запрос.
 
 ## Обязательные поля атомарного утверждения
 
@@ -48,7 +54,7 @@
 
 Протокол работы приведён в [analysis-cycle.md](../../../references/analysis-cycle.md).
 
-Для безопасной записи использовать транспортный пакет `schema_version: 1.0` и `scripts/record_analysis_cycle.py`. Допустимые разделы: `facts`, `project_packages`, `fact_extraction_runs`, `information_gaps`, `shared_resources`, `resource_demands`, `package_interfaces`, `coordination_issues`, `coordination_runs`. Сначала выполняется предварительный просмотр, затем отдельный запуск с `--apply`.
+Для безопасной записи использовать транспортный пакет `schema_version: 1.0` и `scripts/record_analysis_cycle.py`. Допустимые разделы: `facts`, `decisions`, `project_packages`, `fact_extraction_runs`, `information_gaps`, `shared_resources`, `resource_demands`, `package_interfaces`, `coordination_issues`, `coordination_runs`, `as_is_snapshots`, `analysis_requests`. Сначала выполняется предварительный просмотр, затем запуск с `--apply` после одного согласия на весь показанный пакет.
 
 ## Утверждённое требование
 

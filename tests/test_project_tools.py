@@ -21,6 +21,7 @@ AUDIT = SCRIPT_ROOT / "audit_project.py"
 INVENTORY = SCRIPT_ROOT / "inventory_document.py"
 RECORD_BASELINE = SCRIPT_ROOT / "record_baseline_snapshot.py"
 RECORD_ANALYSIS = SCRIPT_ROOT / "record_analysis_cycle.py"
+BUILD_CONTEXT = SCRIPT_ROOT / "build_project_context.py"
 PROPOSAL_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "review-contractor-proposal" / "scripts"
 RECORD_PROPOSAL = PROPOSAL_SCRIPT_ROOT / "record_proposal_review.py"
 BUILD_DOSSIER = PROPOSAL_SCRIPT_ROOT / "build_proposal_dossier.py"
@@ -154,6 +155,10 @@ def write_jsonl(path: Path, *records: dict) -> None:
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
         encoding="utf-8",
     )
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def complete_proposal_contract(
@@ -436,6 +441,9 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue((project / ".home-control" / "compliance_assessments.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "compliance_results.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "regulatory_sync_runs.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "document_intake_batches.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "as_is_snapshots.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "analysis_requests.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "reports" / "proposals").is_dir())
 
     def test_audit_reports_duplicate_document_ids(self) -> None:
@@ -521,6 +529,186 @@ class ProjectToolsTest(unittest.TestCase):
             rejected = run_script(RECORD_ANALYSIS, project, invalid_path)
             self.assertEqual(rejected.returncode, 2)
             self.assertIn("missing required field locator", rejected.stderr)
+
+    def test_as_is_snapshot_analysis_request_and_context_card_are_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project, "--name", "Тестовый дом").returncode, 0)
+            package = {
+                "schema_version": "1.0",
+                "facts": [{
+                    "fact_id": "F-ASIS-1",
+                    "statement": "Владелец сообщил, что дом находится на этапе эксплуатации",
+                    "statement_kind": "source_fact",
+                    "evidence_origin": "owner_confirmation",
+                    "verification_status": "verified",
+                    "locator": "тестовая задача, сообщение владельца",
+                    "recorded_at": "2026-08-19",
+                    "discipline_ids": [],
+                    "package_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "system_ids": [],
+                }],
+                "decisions": [{
+                    "decision_id": "D-ASIS-1",
+                    "decision_type": "as_is_snapshot_acceptance",
+                    "decision": "Использовать показанный снимок как рабочее состояние объекта",
+                    "status": "approved",
+                    "approved_by": "owner",
+                    "approved_at": "2026-08-19",
+                    "source_fact_ids": ["F-ASIS-1"],
+                    "notes": "Решение не заменяет техническую верификацию факта",
+                }],
+                "as_is_snapshots": [{
+                    "as_is_snapshot_id": "AIS-1",
+                    "snapshot_version": 1,
+                    "scope": "Дом в целом",
+                    "captured_at": "2026-08-19",
+                    "owner_decision_id": "D-ASIS-1",
+                    "supersedes_as_is_snapshot_id": "",
+                    "document_versions": [],
+                    "source_fact_ids": ["F-ASIS-1"],
+                    "information_gap_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "physical_element_ids": [],
+                    "system_ids": [],
+                    "asset_ids": [],
+                    "route_ids": [],
+                    "asset_event_ids": [],
+                    "condition_assessment_ids": [],
+                    "limitations": ["Техническое обследование в тесте не выполнялось"],
+                }],
+                "analysis_requests": [{
+                    "analysis_request_id": "ANR-1",
+                    "request_series_id": "SERIES-1",
+                    "request_version": 1,
+                    "request_text": "Предложить следующий этап проверки дома",
+                    "request_type": "question",
+                    "status": "open",
+                    "requested_at": "2026-08-19",
+                    "context_mode": "as_is_only",
+                    "as_is_snapshot_id": "AIS-1",
+                    "baseline_snapshot_id": "",
+                    "source_document_ids": [],
+                    "package_ids": [],
+                    "information_gap_ids": [],
+                    "target_entity_ids": [],
+                    "requested_outputs": ["Краткая рекомендация и следующий шаг"],
+                    "result_paths": [],
+                    "supersedes_analysis_request_id": "",
+                }],
+            }
+            package_path = project / "context-package.json"
+            package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+            preview = run_script(RECORD_ANALYSIS, project, package_path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            applied = run_script(RECORD_ANALYSIS, project, package_path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            resumed_request = dict(package["analysis_requests"][0])
+            resumed_request.update({
+                "analysis_request_id": "ANR-2",
+                "request_version": 2,
+                "status": "ready_to_resume",
+                "revised_at": "2026-08-20",
+                "supersedes_analysis_request_id": "ANR-1",
+            })
+            revision_path = project / "request-revision.json"
+            revision_path.write_text(
+                json.dumps(
+                    {"schema_version": "1.0", "analysis_requests": [resumed_request]},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(run_script(RECORD_ANALYSIS, project, revision_path, "--apply").returncode, 0)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            card_preview = run_script(BUILD_CONTEXT, project)
+            self.assertEqual(card_preview.returncode, 0, card_preview.stderr)
+            self.assertIn("AIS-1 · версия 1", card_preview.stdout)
+            self.assertIn("ANR-2: Предложить следующий этап проверки дома", card_preview.stdout)
+            self.assertNotIn("ANR-1: Предложить следующий этап проверки дома", card_preview.stdout)
+            card_applied = run_script(BUILD_CONTEXT, project, "--apply")
+            self.assertEqual(card_applied.returncode, 0, card_applied.stderr)
+            report = project / ".home-control" / "reports" / "project-context.md"
+            self.assertTrue(report.is_file())
+            report_text = report.read_text(encoding="utf-8")
+            self.assertIn("Карточка объекта и продолжения работы", report_text)
+            self.assertEqual(report_text, card_preview.stdout)
+
+    def test_as_is_snapshot_rejects_document_without_complete_reading_and_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            document_path = project / "01_Обмеры_и_исходные_данные" / "inspection.txt"
+            document_path.write_text("Фактическое состояние", encoding="utf-8")
+            self.assertEqual(run_script(INDEX, project).returncode, 0)
+            document = json.loads(
+                (project / ".home-control" / "documents.json").read_text(encoding="utf-8")
+            )["items"][0]
+            current_version = max(document["versions"], key=lambda value: value["version"])
+            control = project / ".home-control"
+            fact = {
+                "fact_id": "F-ASIS-DOC",
+                "statement": "Документ содержит описание фактического состояния",
+                "statement_kind": "source_fact",
+                "evidence_origin": "actual_or_acceptance_document",
+                "verification_status": "verified",
+                "source_document_id": document["document_id"],
+                "document_version": current_version["version"],
+                "sha256": document["sha256"],
+                "locator": "строка 1",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": [],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            decision = {
+                "decision_id": "D-ASIS-DOC",
+                "decision_type": "as_is_snapshot_acceptance",
+                "decision": "Использовать снимок",
+                "status": "approved",
+                "approved_by": "owner",
+                "approved_at": "2026-08-19",
+                "source_fact_ids": ["F-ASIS-DOC"],
+            }
+            snapshot = {
+                "as_is_snapshot_id": "AIS-DOC",
+                "snapshot_version": 1,
+                "scope": "Объект",
+                "captured_at": "2026-08-19",
+                "owner_decision_id": "D-ASIS-DOC",
+                "supersedes_as_is_snapshot_id": "",
+                "document_versions": [{
+                    "document_id": document["document_id"],
+                    "document_version": current_version["version"],
+                    "sha256": document["sha256"],
+                }],
+                "source_fact_ids": ["F-ASIS-DOC"],
+                "information_gap_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "physical_element_ids": [],
+                "system_ids": [],
+                "asset_ids": [],
+                "route_ids": [],
+                "asset_event_ids": [],
+                "condition_assessment_ids": [],
+                "limitations": [],
+            }
+            write_jsonl(control / "facts.jsonl", fact)
+            write_jsonl(control / "decisions.jsonl", decision)
+            write_jsonl(control / "as_is_snapshots.jsonl", snapshot)
+            audited = run_script(AUDIT, project)
+            self.assertEqual(audited.returncode, 1)
+            self.assertIn("has no complete reading and fact extraction", audited.stdout)
 
     def test_regulatory_package_previews_validates_and_appends_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -706,8 +894,8 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue(changed_result["changed"])
             self.assertEqual(changed_result["source_checks"][0]["change_status"], "changed")
 
-    def test_real_v1_through_v6_projects_migrate_without_losing_existing_data(self) -> None:
-        for version in ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0"):
+    def test_real_v1_through_v7_projects_migrate_without_losing_existing_data(self) -> None:
+        for version in ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 create_legacy_project(project, version)
@@ -730,6 +918,7 @@ class ProjectToolsTest(unittest.TestCase):
                     "4.0": "baseline_snapshots.jsonl",
                     "5.0": "project_packages.jsonl",
                     "6.0": "regulatory_requirements.jsonl",
+                    "7.0": "document_intake_batches.jsonl",
                 }[version]
                 self.assertIn(expected_added_registry, preview.stdout)
                 self.assertIn("update_project_marker_version", preview.stdout)
@@ -785,7 +974,7 @@ class ProjectToolsTest(unittest.TestCase):
         self.assertIn("inside the plugin distribution", refused.stderr)
 
     def test_unknown_older_and_newer_versions_are_blocked(self) -> None:
-        for version, expected in (("1.5", "No supported migration"), ("8.0", "Refusing to downgrade")):
+        for version, expected in (("1.5", "No supported migration"), ("9.0", "Refusing to downgrade")):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 self.assertEqual(run_script(INIT, project).returncode, 0)
@@ -1059,6 +1248,11 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(document["intake_contexts"][0]["description"], description)
             self.assertEqual(document["intake_contexts"][0]["declared_by"], "user")
             self.assertEqual(document["intake_contexts"][0]["verification_status"], "unreviewed")
+            batch_id = document["intake_contexts"][0]["intake_batch_id"]
+            batches = read_jsonl(project / ".home-control" / "document_intake_batches.jsonl")
+            self.assertEqual(len(batches), 1)
+            self.assertEqual(batches[0]["intake_batch_id"], batch_id)
+            self.assertEqual(batches[0]["items"][0]["document_id"], document["document_id"])
 
             repeated = run_script(
                 INGEST,
@@ -1080,6 +1274,78 @@ class ProjectToolsTest(unittest.TestCase):
                 if item["relative_path"] == f"{target_folder}/{source.name}"
             )
             self.assertEqual(len(document["intake_contexts"]), 1)
+            self.assertEqual(
+                len(read_jsonl(project / ".home-control" / "document_intake_batches.jsonl")),
+                1,
+            )
+
+    def test_heterogeneous_intake_manifest_uses_one_preview_and_one_atomic_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            project = base / "project"
+            design = base / "Проект.pdf"
+            quote = base / "КП.xlsx"
+            design.write_bytes(b"design")
+            quote.write_bytes(b"quote")
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            manifest = {
+                "schema_version": "1.0",
+                "batch_description": "Первичный пакет документов объекта",
+                "items": [
+                    {
+                        "source": str(design),
+                        "target_folder": "02_Проекты_и_технические_решения",
+                        "description": "Проектное решение, статус предстоит проверить",
+                    },
+                    {
+                        "source": str(quote),
+                        "target_folder": "03_Коммерческие_предложения",
+                        "description": "Коммерческое предложение подрядчика",
+                    },
+                ],
+            }
+            manifest_path = base / "intake.json"
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            documents_path = project / ".home-control" / "documents.json"
+            before = documents_path.read_bytes()
+
+            preview = run_script(INGEST, project, "--manifest", manifest_path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            preview_data = json.loads(preview.stdout)
+            self.assertEqual(preview_data["mode"], "preview")
+            self.assertEqual(len(preview_data["items"]), 2)
+            self.assertTrue(preview_data["intake_batch_id"].startswith("INT-"))
+            self.assertEqual(documents_path.read_bytes(), before)
+
+            wrong_plan = run_script(
+                INGEST,
+                project,
+                "--manifest",
+                manifest_path,
+                "--expected-batch-id",
+                "INT-not-the-approved-plan",
+                "--apply",
+            )
+            self.assertEqual(wrong_plan.returncode, 2)
+            self.assertEqual(documents_path.read_bytes(), before)
+            self.assertFalse((project / "02_Проекты_и_технические_решения" / design.name).exists())
+
+            applied = run_script(
+                INGEST,
+                project,
+                "--manifest",
+                manifest_path,
+                "--expected-batch-id",
+                preview_data["intake_batch_id"],
+                "--apply",
+            )
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertTrue((project / "02_Проекты_и_технические_решения" / design.name).is_file())
+            self.assertTrue((project / "03_Коммерческие_предложения" / quote.name).is_file())
+            batches = read_jsonl(project / ".home-control" / "document_intake_batches.jsonl")
+            self.assertEqual(len(batches), 1)
+            self.assertEqual(len(batches[0]["items"]), 2)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
 
     def test_ingest_blocks_name_collision_without_overwriting_either_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

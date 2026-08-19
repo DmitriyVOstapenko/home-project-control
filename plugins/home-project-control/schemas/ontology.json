@@ -1,6 +1,6 @@
 {
   "ontology_id": "home-project-control",
-  "schema_version": "5.0",
+  "schema_version": "6.0",
   "dimensions": {
     "statement_kind": [
       "source_fact",
@@ -250,6 +250,32 @@
     ],
     "fact_extraction_status": ["in_progress", "complete", "blocked", "superseded"],
     "information_gap_status": ["open", "requested", "answered", "verified", "not_applicable", "superseded"],
+    "analysis_request_type": [
+      "question",
+      "proposal_review",
+      "solution_selection",
+      "project_planning",
+      "purchase_comparison",
+      "regulatory_check",
+      "operation_or_intervention",
+      "other"
+    ],
+    "analysis_request_status": [
+      "open",
+      "waiting_information",
+      "ready_to_resume",
+      "in_progress",
+      "completed",
+      "cancelled",
+      "superseded"
+    ],
+    "analysis_context_mode": [
+      "as_is_and_baseline",
+      "as_is_only",
+      "baseline_only",
+      "documents_only",
+      "unbound"
+    ],
     "shared_resource_type": [
       "electrical_capacity",
       "physical_space",
@@ -379,6 +405,9 @@
     "ProjectPackage.status": "project_package_status",
     "FactExtractionRun.status": "fact_extraction_status",
     "InformationGap.status": "information_gap_status",
+    "AnalysisRequest.request_type": "analysis_request_type",
+    "AnalysisRequest.status": "analysis_request_status",
+    "AnalysisRequest.context_mode": "analysis_context_mode",
     "SharedResource.resource_type": "shared_resource_type",
     "ResourceDemand.status": "resource_demand_status",
     "PackageInterface.interface_type": "package_interface_type",
@@ -438,13 +467,24 @@
     "RegulatoryRequirement": {"id_field": "regulatory_requirement_id", "id_prefix": "RQR-", "registry": ".home-control/regulatory_requirements.jsonl"},
     "ComplianceAssessment": {"id_field": "compliance_assessment_id", "id_prefix": "RCA-", "registry": ".home-control/compliance_assessments.jsonl"},
     "ComplianceResult": {"id_field": "compliance_result_id", "id_prefix": "RCR-", "registry": ".home-control/compliance_results.jsonl"},
-    "RegulatorySyncRun": {"id_field": "regulatory_sync_run_id", "id_prefix": "RSR-", "registry": ".home-control/regulatory_sync_runs.jsonl"}
+    "RegulatorySyncRun": {"id_field": "regulatory_sync_run_id", "id_prefix": "RSR-", "registry": ".home-control/regulatory_sync_runs.jsonl"},
+    "DocumentIntakeBatch": {"id_field": "intake_batch_id", "id_prefix": "INT-", "registry": ".home-control/document_intake_batches.jsonl"},
+    "AsIsSnapshot": {"id_field": "as_is_snapshot_id", "id_prefix": "AIS-", "registry": ".home-control/as_is_snapshots.jsonl"},
+    "AnalysisRequest": {"id_field": "analysis_request_id", "id_prefix": "ANR-", "registry": ".home-control/analysis_requests.jsonl"}
   },
   "required_relations": [
     "ReadingRun.source_document_id -> SourceDocument.document_id",
     "DocumentInventory.source_document_id -> SourceDocument.document_id",
     "Fact.source_document_id -> SourceDocument.document_id or owner confirmation",
     "Fact.package_ids -> ProjectPackage.package_id, Fact.site_ids -> Site.site_id, Fact.zone_ids -> Zone.zone_id and Fact.system_ids -> System.system_id when applicable",
+    "DocumentIntakeBatch.items.document_id -> SourceDocument.document_id at the recorded SHA-256 and relative path",
+    "AsIsSnapshot.owner_decision_id -> OwnerDecision.decision_id with decision_type as_is_snapshot_acceptance",
+    "AsIsSnapshot.supersedes_as_is_snapshot_id -> AsIsSnapshot.as_is_snapshot_id when snapshot_version is greater than 1",
+    "AsIsSnapshot.source_fact_ids -> Fact.fact_id and AsIsSnapshot.document_versions.document_id -> SourceDocument.document_id at the exact document_version and SHA-256",
+    "AsIsSnapshot.information_gap_ids -> InformationGap.gap_id and its site, zone, element, system, asset, route, event and condition-assessment identifiers -> their registered entities when applicable",
+    "AnalysisRequest.supersedes_analysis_request_id -> AnalysisRequest.analysis_request_id for the immediately preceding revision of the same request_series_id",
+    "AnalysisRequest.as_is_snapshot_id -> AsIsSnapshot.as_is_snapshot_id and AnalysisRequest.baseline_snapshot_id -> BaselineSnapshot.baseline_snapshot_id when the request depends on those contexts",
+    "AnalysisRequest.source_document_ids -> SourceDocument.document_id, package_ids -> ProjectPackage.package_id, information_gap_ids -> InformationGap.gap_id and target_entity_ids -> registered project entities when applicable",
     "BaselineSnapshot.owner_decision_id -> OwnerDecision.decision_id with decision_type baseline_acceptance",
     "BaselineSnapshot.supersedes_baseline_snapshot_id -> BaselineSnapshot.baseline_snapshot_id when baseline_version is greater than 1",
     "BaselineSnapshot.document_versions.document_id -> SourceDocument.document_id at the exact document_version and SHA-256",
@@ -558,6 +598,10 @@
   ],
   "invariants": [
     "A source file is never changed by a registry operation.",
+    "A heterogeneous document intake is previewed as one disclosed batch and applied only after one explicit owner confirmation; every applied item keeps its declared role as unreviewed context until the document is read.",
+    "An AsIsSnapshot is immutable and versioned, contains exact evidence and unresolved gaps as of its capture time, admits a document version only after complete reading and fact extraction, and remains separate from the accepted BaselineSnapshot that describes what is to be implemented.",
+    "Owner acceptance of an AsIsSnapshot confirms use of the disclosed snapshot as working context and does not upgrade uncertain source facts into verified physical facts.",
+    "An AnalysisRequest is persisted independently of a chat task; every revision preserves the original request text, type and request time, a new revision may resume it after new evidence arrives, and a completed result identifies the context snapshots and output paths actually used.",
     "A document is not fully read unless its exact indexed version has a complete ReadingRun without unresolved coverage gaps.",
     "A complete ReadingRun proves physical coverage of a document but does not by itself prove complete semantic extraction; that requires a complete FactExtractionRun for the same exact version.",
     "A source document is stored once; its facts may belong to multiple disciplines, project packages, sites, zones and systems without copying the original.",
