@@ -176,6 +176,295 @@ def validate_physical_record_requirements(
                 warnings.append(f"{location}: missing or unknown verification_status")
 
 
+def validate_context_layer(
+    root: Path,
+    jsonl_records: dict[str, list[tuple[int, dict]]],
+    jsonl_ids: dict[str, set[str]],
+    active_documents: set[str],
+    document_versions: dict[str, set[tuple[object, str]]],
+    document_paths: dict[str, str],
+    complete_read_versions: set[tuple[str, object, str]],
+    warnings: list[str],
+) -> None:
+    facts_by_id = records_by_id(jsonl_records["facts.jsonl"], "fact_id")
+    decisions_by_id = records_by_id(jsonl_records["decisions.jsonl"], "decision_id")
+    as_is_by_id = records_by_id(jsonl_records["as_is_snapshots.jsonl"], "as_is_snapshot_id")
+    baselines = jsonl_ids["baseline_snapshots.jsonl"]
+    packages = jsonl_ids["project_packages.jsonl"]
+    gaps = jsonl_ids["information_gaps.jsonl"]
+    all_registered_ids: set[str] = set(document_versions)
+    for identifiers in jsonl_ids.values():
+        all_registered_ids.update(identifiers)
+    complete_extraction_versions: set[tuple[str, object, str]] = set()
+    for _, extraction in jsonl_records["fact_extraction_runs.jsonl"]:
+        key = (
+            str(extraction.get("source_document_id", "")).strip(),
+            extraction.get("document_version"),
+            str(extraction.get("sha256", "")).strip(),
+        )
+        expected = normalized_string_set(extraction.get("expected_sections"))
+        checked = normalized_string_set(extraction.get("checked_sections"))
+        coverage_gaps = extraction.get("coverage_gaps")
+        extracted_fact_ids = extraction.get("fact_ids")
+        if (
+            extraction.get("status") == "complete"
+            and key in complete_read_versions
+            and expected
+            and checked == expected
+            and isinstance(coverage_gaps, list)
+            and not coverage_gaps
+            and isinstance(extracted_fact_ids, list)
+            and bool(extracted_fact_ids)
+        ):
+            complete_extraction_versions.add(key)
+
+    for line_number, batch in jsonl_records["document_intake_batches.jsonl"]:
+        location = f"document_intake_batches.jsonl:{line_number}"
+        if batch.get("status") != "applied":
+            warnings.append(f"{location}: status must be applied")
+        if not isinstance(batch.get("applied_at_utc"), str) or not batch["applied_at_utc"].strip():
+            warnings.append(f"{location}: applied_at_utc is required")
+        if not isinstance(batch.get("batch_description", ""), str):
+            warnings.append(f"{location}: batch_description must be a string")
+        items = batch.get("items")
+        if not isinstance(items, list) or not items:
+            warnings.append(f"{location}: items must be a non-empty array")
+            continue
+        for number, item in enumerate(items, 1):
+            item_location = f"{location}:item {number}"
+            if not isinstance(item, dict):
+                warnings.append(f"{item_location}: expected an object")
+                continue
+            document_id = str(item.get("document_id", "")).strip()
+            sha256 = str(item.get("source_sha256", "")).strip()
+            if document_id not in document_versions:
+                warnings.append(f"{item_location}: unknown document_id")
+            elif not any(value[1] == sha256 for value in document_versions[document_id]):
+                warnings.append(f"{item_location}: source_sha256 is not a registered document version")
+            if document_id in document_paths and item.get("relative_path") != document_paths[document_id]:
+                warnings.append(f"{item_location}: relative_path does not match the document index")
+            for field in ("source_filename", "relative_path", "description"):
+                if not isinstance(item.get(field), str) or not item[field].strip():
+                    warnings.append(f"{item_location}: missing required field {field}")
+            if item.get("action") not in {"copy", "already_in_place", "use_existing_identical"}:
+                warnings.append(f"{item_location}: unknown intake action")
+            if item.get("verification_status") != "unreviewed":
+                warnings.append(f"{item_location}: declared intake context must remain unreviewed")
+
+    seen_snapshot_versions: dict[int, str] = {}
+    superseded_snapshot_ids: set[str] = set()
+    entity_fields = {
+        "site_ids": jsonl_ids["sites.jsonl"],
+        "zone_ids": jsonl_ids["zones.jsonl"],
+        "physical_element_ids": jsonl_ids["physical_elements.jsonl"],
+        "system_ids": jsonl_ids["systems.jsonl"],
+        "asset_ids": jsonl_ids["assets.jsonl"],
+        "route_ids": jsonl_ids["routes.jsonl"],
+        "asset_event_ids": jsonl_ids["asset_events.jsonl"],
+        "condition_assessment_ids": jsonl_ids["condition_assessments.jsonl"],
+    }
+    for line_number, snapshot in jsonl_records["as_is_snapshots.jsonl"]:
+        location = f"as_is_snapshots.jsonl:{line_number}"
+        snapshot_id = str(snapshot.get("as_is_snapshot_id", "")).strip()
+        version = snapshot.get("snapshot_version")
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+            warnings.append(f"{location}: snapshot_version must be a positive integer")
+        elif version in seen_snapshot_versions:
+            warnings.append(f"{location}: duplicate snapshot_version {version}")
+        else:
+            seen_snapshot_versions[version] = snapshot_id
+        for field in ("scope", "captured_at"):
+            if not isinstance(snapshot.get(field), str) or not snapshot[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        decision_id = str(snapshot.get("owner_decision_id", "")).strip()
+        decision = decisions_by_id.get(decision_id)
+        if (
+            decision is None
+            or decision.get("decision_type") != "as_is_snapshot_acceptance"
+            or decision.get("status") != "approved"
+            or decision.get("approved_by") != "owner"
+        ):
+            warnings.append(f"{location}: no explicit approved owner as-is decision")
+        supersedes = str(snapshot.get("supersedes_as_is_snapshot_id", "")).strip()
+        if version == 1 and supersedes:
+            warnings.append(f"{location}: snapshot version 1 must not supersede another snapshot")
+        if isinstance(version, int) and version > 1:
+            prior = as_is_by_id.get(supersedes)
+            if prior is None or prior.get("snapshot_version") != version - 1:
+                warnings.append(f"{location}: versioned as-is snapshot must supersede the immediately preceding snapshot")
+            else:
+                superseded_snapshot_ids.add(supersedes)
+        source_fact_ids = id_list(snapshot, "source_fact_ids", location, warnings)
+        if not source_fact_ids or any(value not in facts_by_id for value in source_fact_ids):
+            warnings.append(f"{location}: missing or unknown source_fact_ids")
+        for fact_id in source_fact_ids:
+            fact = facts_by_id.get(fact_id)
+            if fact is not None and fact.get("verification_status") in {"unreviewed", "extracted"}:
+                warnings.append(f"{location}: source fact {fact_id} is not ready for an as-is snapshot")
+        for field, known in entity_fields.items():
+            if not isinstance(snapshot.get(field), list):
+                warnings.append(f"{location}: {field} must be an array")
+            values = id_list(snapshot, field, location, warnings)
+            if any(value not in known for value in values):
+                warnings.append(f"{location}: {field} contains an unknown link")
+        if not isinstance(snapshot.get("information_gap_ids"), list):
+            warnings.append(f"{location}: information_gap_ids must be an array")
+        gap_ids = id_list(snapshot, "information_gap_ids", location, warnings)
+        if any(value not in gaps for value in gap_ids):
+            warnings.append(f"{location}: information_gap_ids contains an unknown link")
+        limitations = snapshot.get("limitations")
+        if not isinstance(limitations, list) or any(
+            not isinstance(value, str) or not value.strip() for value in limitations
+        ):
+            warnings.append(f"{location}: limitations must be a string array")
+            limitations = []
+        uncertain_fact_ids = [
+            fact_id
+            for fact_id in source_fact_ids
+            if facts_by_id.get(fact_id, {}).get("verification_status")
+            in {"conflicted", "requires_confirmation"}
+        ]
+        if uncertain_fact_ids and not gap_ids and not limitations:
+            warnings.append(f"{location}: uncertain source facts require a gap or explicit limitation")
+        versions = snapshot.get("document_versions")
+        snapshot_document_keys: set[tuple[str, object, str]] = set()
+        if not isinstance(versions, list):
+            warnings.append(f"{location}: document_versions must be an array")
+        else:
+            for number, item in enumerate(versions, 1):
+                if not isinstance(item, dict):
+                    warnings.append(f"{location}: document version {number} must be an object")
+                    continue
+                document_id = str(item.get("document_id", "")).strip()
+                version_key = (item.get("document_version"), str(item.get("sha256", "")).strip())
+                if document_id not in active_documents or version_key not in document_versions.get(document_id, set()):
+                    warnings.append(f"{location}: document version {number} is not an exact active version")
+                exact_key = (document_id, version_key[0], version_key[1])
+                snapshot_document_keys.add(exact_key)
+                if exact_key not in complete_read_versions or exact_key not in complete_extraction_versions:
+                    warnings.append(f"{location}: document version {number} has no complete reading and fact extraction")
+        for fact_id in source_fact_ids:
+            fact = facts_by_id.get(fact_id)
+            if fact is None:
+                continue
+            source_document_id = str(fact.get("source_document_id", "")).strip()
+            if not source_document_id:
+                continue
+            fact_key = (
+                source_document_id,
+                fact.get("document_version"),
+                str(fact.get("sha256", "")).strip(),
+            )
+            if fact_key not in snapshot_document_keys:
+                warnings.append(f"{location}: source fact {fact_id} document version is absent from the snapshot")
+    if as_is_by_id and len(set(as_is_by_id) - superseded_snapshot_ids) != 1:
+        warnings.append("as_is_snapshots.jsonl: more than one current as-is snapshot")
+
+    requests_by_series: dict[str, list[dict]] = {}
+    for line_number, request in jsonl_records["analysis_requests.jsonl"]:
+        location = f"analysis_requests.jsonl:{line_number}"
+        series_id = str(request.get("request_series_id", "")).strip()
+        if not series_id:
+            warnings.append(f"{location}: request_series_id is required")
+        else:
+            requests_by_series.setdefault(series_id, []).append(request)
+        version = request.get("request_version")
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+            warnings.append(f"{location}: request_version must be a positive integer")
+        for field in ("request_text", "requested_at"):
+            if not isinstance(request.get(field), str) or not request[field].strip():
+                warnings.append(f"{location}: missing required field {field}")
+        if request.get("request_type") not in DIMENSIONS["analysis_request_type"]:
+            warnings.append(f"{location}: unknown analysis request type")
+        if request.get("status") not in DIMENSIONS["analysis_request_status"]:
+            warnings.append(f"{location}: unknown analysis request status")
+        context_mode = request.get("context_mode")
+        if context_mode not in DIMENSIONS["analysis_context_mode"]:
+            warnings.append(f"{location}: unknown analysis context mode")
+        as_is_id = str(request.get("as_is_snapshot_id", "")).strip()
+        baseline_id = str(request.get("baseline_snapshot_id", "")).strip()
+        if as_is_id and as_is_id not in as_is_by_id:
+            warnings.append(f"{location}: unknown as_is_snapshot_id")
+        if baseline_id and baseline_id not in baselines:
+            warnings.append(f"{location}: unknown baseline_snapshot_id")
+        if context_mode in {"as_is_and_baseline", "as_is_only"} and not as_is_id:
+            warnings.append(f"{location}: context mode requires an as-is snapshot")
+        if context_mode in {"as_is_and_baseline", "baseline_only"} and not baseline_id:
+            warnings.append(f"{location}: context mode requires a baseline snapshot")
+        linked_fields = {
+            "source_document_ids": set(document_versions),
+            "package_ids": packages,
+            "information_gap_ids": gaps,
+            "target_entity_ids": all_registered_ids,
+        }
+        for field, known in linked_fields.items():
+            if not isinstance(request.get(field), list):
+                warnings.append(f"{location}: {field} must be an array")
+            values = id_list(request, field, location, warnings)
+            if any(value not in known for value in values):
+                warnings.append(f"{location}: {field} contains an unknown link")
+        outputs = normalized_string_set(request.get("requested_outputs"))
+        if not outputs:
+            warnings.append(f"{location}: requested_outputs must be a non-empty unique string array")
+        result_paths = request.get("result_paths")
+        if not isinstance(result_paths, list) or any(
+            not isinstance(value, str) or not value.strip() for value in result_paths
+        ):
+            warnings.append(f"{location}: result_paths must be a string array")
+            result_paths = []
+        if request.get("status") == "completed":
+            if context_mode == "unbound":
+                warnings.append(f"{location}: completed request cannot have unbound context")
+            if not result_paths:
+                warnings.append(f"{location}: completed request must identify a saved result")
+            for value in result_paths:
+                candidate = root / value
+                reports_root = (root / ".home-control" / "reports").resolve()
+                try:
+                    resolved = candidate.resolve()
+                    valid = reports_root in resolved.parents and resolved.is_file() and not is_linklike(candidate)
+                except (OSError, RuntimeError):
+                    valid = False
+                if not valid:
+                    warnings.append(f"{location}: completed result path is missing or outside reports")
+        if version == 1 and str(request.get("supersedes_analysis_request_id", "")).strip():
+            warnings.append(f"{location}: request version 1 must not supersede another revision")
+        if isinstance(version, int) and version > 1:
+            if not isinstance(request.get("revised_at"), str) or not request["revised_at"].strip():
+                warnings.append(f"{location}: revised_at is required after version 1")
+
+    requests_by_id = records_by_id(jsonl_records["analysis_requests.jsonl"], "analysis_request_id")
+    for series_id, revisions in requests_by_series.items():
+        by_version = {request.get("request_version"): request for request in revisions}
+        if len(by_version) != len(revisions):
+            warnings.append(f"analysis_requests.jsonl: duplicate request_version in series {series_id}")
+            continue
+        expected_versions = set(range(1, len(revisions) + 1))
+        if set(by_version) != expected_versions:
+            warnings.append(f"analysis_requests.jsonl: non-contiguous versions in series {series_id}")
+            continue
+        for version in range(2, len(revisions) + 1):
+            current = by_version[version]
+            prior_id = str(current.get("supersedes_analysis_request_id", "")).strip()
+            prior = requests_by_id.get(prior_id)
+            if prior is not by_version[version - 1]:
+                warnings.append(
+                    f"analysis_requests.jsonl: version {version} in series {series_id} must supersede version {version - 1}"
+                )
+            elif current.get("request_text") != prior.get("request_text"):
+                warnings.append(
+                    f"analysis_requests.jsonl: version {version} in series {series_id} must preserve the original request_text"
+                )
+            elif current.get("requested_at") != prior.get("requested_at"):
+                warnings.append(
+                    f"analysis_requests.jsonl: version {version} in series {series_id} must preserve the original requested_at"
+                )
+            elif current.get("request_type") != prior.get("request_type"):
+                warnings.append(
+                    f"analysis_requests.jsonl: version {version} in series {series_id} must preserve the original request_type"
+                )
+
+
 def complete_coverage_is_valid(coverage: object) -> bool:
     if not isinstance(coverage, dict):
         return False
@@ -1745,6 +2034,7 @@ def audit(root: Path) -> list[str]:
     active_documents: set[str] = set()
     proposal_document_ids: set[str] = set()
     document_versions: dict[str, set[tuple[object, str]]] = {}
+    document_paths: dict[str, str] = {}
     current_document_versions: dict[str, tuple[object, str]] = {}
     seen_document_ids: set[str] = set()
     for item_number, item in enumerate(documents.get("items", []), 1):
@@ -1761,6 +2051,7 @@ def audit(root: Path) -> list[str]:
         if item.get("status") == "active":
             active_documents.add(document_id)
         relative_path = str(item.get("relative_path", "")).replace("\\", "/").strip("/")
+        document_paths[document_id] = relative_path
         if relative_path.split("/", 1)[0].casefold() == "03_Коммерческие_предложения".casefold():
             proposal_document_ids.add(document_id)
         versions: set[tuple[object, str]] = set()
@@ -1953,6 +2244,16 @@ def audit(root: Path) -> list[str]:
         jsonl_ids,
         active_documents,
         document_versions,
+        complete_read_versions,
+        warnings,
+    )
+    validate_context_layer(
+        root,
+        jsonl_records,
+        jsonl_ids,
+        active_documents,
+        document_versions,
+        document_paths,
         complete_read_versions,
         warnings,
     )

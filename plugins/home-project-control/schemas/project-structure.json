@@ -1,39 +1,45 @@
 {
   "plugin_id": "home-project-control",
-  "structure_version": "7.0",
+  "structure_version": "8.0",
   "supported_migrations": {
     "1.0": {
-      "to": "7.0",
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "1.0",
       "documents_schema_to": "2.0"
     },
     "2.0": {
-      "to": "7.0",
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
     },
     "3.0": {
-      "to": "7.0",
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
     },
     "4.0": {
-      "to": "7.0",
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
     },
     "5.0": {
-      "to": "7.0",
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
     },
     "6.0": {
-      "to": "7.0",
+      "to": "8.0",
+      "mode": "additive",
+      "documents_schema_from": "2.0",
+      "documents_schema_to": "2.0"
+    },
+    "7.0": {
+      "to": "8.0",
       "mode": "additive",
       "documents_schema_from": "2.0",
       "documents_schema_to": "2.0"
@@ -114,7 +120,10 @@
     ".home-control/regulatory_requirements.jsonl": {"entity": "RegulatoryRequirement", "id_field": "regulatory_requirement_id", "append_only": true, "introduced_in": "7.0"},
     ".home-control/compliance_assessments.jsonl": {"entity": "ComplianceAssessment", "id_field": "compliance_assessment_id", "append_only": true, "introduced_in": "7.0"},
     ".home-control/compliance_results.jsonl": {"entity": "ComplianceResult", "id_field": "compliance_result_id", "append_only": true, "introduced_in": "7.0"},
-    ".home-control/regulatory_sync_runs.jsonl": {"entity": "RegulatorySyncRun", "id_field": "regulatory_sync_run_id", "append_only": true, "introduced_in": "7.0"}
+    ".home-control/regulatory_sync_runs.jsonl": {"entity": "RegulatorySyncRun", "id_field": "regulatory_sync_run_id", "append_only": true, "introduced_in": "7.0"},
+    ".home-control/document_intake_batches.jsonl": {"entity": "DocumentIntakeBatch", "id_field": "intake_batch_id", "append_only": true, "introduced_in": "8.0"},
+    ".home-control/as_is_snapshots.jsonl": {"entity": "AsIsSnapshot", "id_field": "as_is_snapshot_id", "append_only": true, "introduced_in": "8.0"},
+    ".home-control/analysis_requests.jsonl": {"entity": "AnalysisRequest", "id_field": "analysis_request_id", "append_only": true, "introduced_in": "8.0"}
   },
   "csv_files": {
     ".home-control/costs.csv": ["cost_id", "date", "work_item_id", "category", "supplier", "description", "amount", "currency", "status", "evidence_document_id", "evidence_locator", "notes"],

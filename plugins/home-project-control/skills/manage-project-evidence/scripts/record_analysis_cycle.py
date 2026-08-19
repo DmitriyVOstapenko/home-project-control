@@ -15,6 +15,7 @@ from audit_project import (
     complete_coverage_is_valid,
     normalized_unit_set,
     validate_analysis_layer,
+    validate_context_layer,
     validate_fact_records,
 )
 from inspect_project import is_linklike, require_ready_project
@@ -23,6 +24,7 @@ from inspect_project import is_linklike, require_ready_project
 PACKAGE_SCHEMA_VERSION = "1.0"
 SECTIONS = {
     "facts": ("facts.jsonl", "fact_id"),
+    "decisions": ("decisions.jsonl", "decision_id"),
     "project_packages": ("project_packages.jsonl", "package_id"),
     "fact_extraction_runs": ("fact_extraction_runs.jsonl", "extraction_run_id"),
     "information_gaps": ("information_gaps.jsonl", "gap_id"),
@@ -31,6 +33,8 @@ SECTIONS = {
     "package_interfaces": ("package_interfaces.jsonl", "package_interface_id"),
     "coordination_issues": ("coordination_issues.jsonl", "coordination_issue_id"),
     "coordination_runs": ("coordination_runs.jsonl", "coordination_run_id"),
+    "as_is_snapshots": ("as_is_snapshots.jsonl", "as_is_snapshot_id"),
+    "analysis_requests": ("analysis_requests.jsonl", "analysis_request_id"),
 }
 
 
@@ -66,23 +70,28 @@ def load_package(path: Path) -> dict:
     return value
 
 
-def document_context(root: Path) -> tuple[set[str], dict[str, set[tuple[object, str]]]]:
+def document_context(
+    root: Path,
+) -> tuple[set[str], dict[str, set[tuple[object, str]]], dict[str, str]]:
     value = json.loads((root / ".home-control" / "documents.json").read_text(encoding="utf-8"))
     active: set[str] = set()
     versions: dict[str, set[tuple[object, str]]] = {}
+    paths: dict[str, str] = {}
     for document in value.get("items", []):
-        if not isinstance(document, dict) or document.get("status") != "active":
+        if not isinstance(document, dict):
             continue
         document_id = str(document.get("document_id", "")).strip()
         if not document_id:
             continue
-        active.add(document_id)
+        if document.get("status") == "active":
+            active.add(document_id)
+        paths[document_id] = str(document.get("relative_path", "")).replace("\\", "/").strip("/")
         versions[document_id] = {
             (item.get("version"), str(item.get("sha256", "")).strip())
             for item in document.get("versions", [])
             if isinstance(item, dict)
         }
-    return active, versions
+    return active, versions, paths
 
 
 def complete_read_versions(root: Path, records: dict[str, list[tuple[int, dict]]]) -> set[tuple[str, object, str]]:
@@ -180,7 +189,7 @@ def validate_package(root: Path, package: dict) -> dict[str, list[dict]]:
     empty = {section: [] for section in SECTIONS}
     existing_records, existing_ids = merged_project_records(root, empty)
     merged_records, merged_ids = merged_project_records(root, additions)
-    active_documents, document_versions = document_context(root)
+    active_documents, document_versions, document_paths = document_context(root)
     existing_warnings: list[str] = []
     validate_fact_records(existing_records, existing_ids, active_documents, document_versions, existing_warnings)
     validate_analysis_layer(
@@ -191,6 +200,16 @@ def validate_package(root: Path, package: dict) -> dict[str, list[dict]]:
         complete_read_versions(root, existing_records),
         existing_warnings,
     )
+    validate_context_layer(
+        root,
+        existing_records,
+        existing_ids,
+        active_documents,
+        document_versions,
+        document_paths,
+        complete_read_versions(root, existing_records),
+        existing_warnings,
+    )
     merged_warnings: list[str] = []
     validate_fact_records(merged_records, merged_ids, active_documents, document_versions, merged_warnings)
     validate_analysis_layer(
@@ -198,6 +217,16 @@ def validate_package(root: Path, package: dict) -> dict[str, list[dict]]:
         merged_ids,
         active_documents,
         document_versions,
+        complete_read_versions(root, merged_records),
+        merged_warnings,
+    )
+    validate_context_layer(
+        root,
+        merged_records,
+        merged_ids,
+        active_documents,
+        document_versions,
+        document_paths,
         complete_read_versions(root, merged_records),
         merged_warnings,
     )

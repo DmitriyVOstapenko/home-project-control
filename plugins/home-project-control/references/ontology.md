@@ -22,6 +22,14 @@
 
 ## Базовая линия и коммерческие предложения
 
+Пользовательский контекст разделён на три независимых слоя:
+
+1. `AsIsSnapshot` — что известно о фактическом состоянии объекта на дату, включая неизвестное и ограничения;
+2. `BaselineSnapshot` — что владелец принял как требования к реализации;
+3. `Quote`, `EquipmentOption` и `Alternative` — что предлагается подрядчиком, поставщиком или аналитиком.
+
+`AsIsSnapshot` неизменяем и версионируется отдельно. Он ссылается на точные факты, версии документов, физические сущности и `InformationGap`. `OwnerDecision(as_is_snapshot_acceptance)` подтверждает использование раскрытого снимка как рабочего контекста, но не превращает конфликтующий или требующий подтверждения факт в проверенный.
+
 `BaselineSnapshot` — неизменяемый версионируемый снимок принятой владельцем базовой линии. Он хранит номер версии, область применения, точные версии и SHA-256 выбранных документов, их роль, область действия, статусы технического и официального утверждения, разрешение конфликтов и точный состав `ApprovedRequirement`.
 
 Принятие снимка фиксируется отдельным `OwnerDecision` с `decision_type: baseline_acceptance`. Это не меняет статус технического или официального утверждения документа. Изменение состава или версии источника создаёт новый `BaselineSnapshot`, а не переписывает прежний.
@@ -35,6 +43,10 @@
 `ReadingRun` доказывает физическое покрытие файла, а `FactExtractionRun` — смысловое извлечение его фактов, требований, конфликтов и пробелов. Завершение первого не подменяет второе.
 
 ## Дисциплины, пакеты и координация
+
+`DocumentIntakeBatch` фиксирует один атомарно принятый разнородный пакет документов после предварительного показа владельцу. Роль каждого файла остаётся непроверенным контекстом до чтения.
+
+`AnalysisRequest` сохраняет вопрос или поручение владельца между задачами Codex и сессиями Claude Code. Ревизии одной серии связывают исходную формулировку, применённые снимки контекста, новые документы и пробелы, требуемые результаты и сохранённые отчёты.
 
 `ProjectPackage` группирует относящиеся к одному результату факты, требования, документы, зоны, системы и пробелы. Пакет не является папкой: один оригинал хранится один раз, а его атомарные факты могут быть связаны с несколькими дисциплинами и пакетами.
 
@@ -88,7 +100,7 @@
 
 Цепочка анализа документов и КП:
 
-`SourceDocument -> DocumentInventory -> ReadingRun -> FactExtractionRun -> Fact/InformationGap -> ProjectPackage -> OwnerDecision(baseline_acceptance) -> BaselineSnapshot -> ApprovedRequirement -> SharedResource/ResourceDemand/CoordinationIssue -> NormReference/RegulatoryRequirement -> ComplianceAssessment/ComplianceResult -> Quote/QuoteItem -> ProposalReview -> Finding -> Alternative -> OwnerDecision`.
+`DocumentIntakeBatch -> SourceDocument -> DocumentInventory -> ReadingRun -> FactExtractionRun -> Fact/InformationGap -> ProjectPackage -> OwnerDecision(as_is_snapshot_acceptance) -> AsIsSnapshot -> OwnerDecision(baseline_acceptance) -> BaselineSnapshot -> ApprovedRequirement -> AnalysisRequest -> SharedResource/ResourceDemand/CoordinationIssue -> NormReference/RegulatoryRequirement -> ComplianceAssessment/ComplianceResult -> Quote/QuoteItem -> ProposalReview -> Finding -> Alternative -> OwnerDecision`.
 
 Цепочка эксплуатации и изменения:
 
