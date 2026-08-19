@@ -2,9 +2,9 @@
 
 Утилита `scripts/record_proposal_review.py` принимает транспортный JSON-пакет `schema_version: 1.0`. Эта версия относится к оболочке пакета и не равна версии обязательного анализа. Новая `ProposalReview` использует текущий `completion_manifest.contract_version` из `schemas/proposal-review-contract.json`. По умолчанию утилита только показывает план добавления; `--apply` разрешён после подтверждения пользователя. Записи добавляются только в управляемые реестры и проходят аудит до окончательного сохранения.
 
-Допустимые разделы: `reading_runs`, `facts`, `contractors`, `suppliers`, `quotes`, `quote_items`, `equipment_options`, `price_observations`, `norm_references`, `findings`, `alternatives`, `proposal_reviews`.
+Допустимые разделы: `reading_runs`, `facts`, `contractors`, `suppliers`, `quotes`, `quote_items`, `equipment_options`, `price_observations`, `norm_references`, `findings`, `alternatives`, `project_packages`, `fact_extraction_runs`, `information_gaps`, `shared_resources`, `resource_demands`, `package_interfaces`, `coordination_issues`, `coordination_runs`, `proposal_reviews`.
 
-Для `price_observations` обязательны `observed_at`, `region`, `currency`, `tax_context`, `delivery_context`, `availability_context` и прямой `source_url`. Для `norm_references` обязательны точные `title`, `version`, `territory`, `checked_at`, `locator`, `source_url` и область применения `scope`.
+Для `price_observations` обязательны `observed_at`, `region`, `currency`, `tax_context`, `delivery_context`, `availability_context` и прямой `source_url`. Для `norm_references` обязательны `designation`, точные `title`, `document_kind`, `version`, `document_status`, `jurisdiction`, `territory`, `checked_at`, `status_source_url`, `source_url` и `scope`. Атомарные требования и результаты соответствия предварительно записываются через `check-regulatory-compliance`.
 
 Минимальная форма центральной записи:
 
@@ -19,6 +19,11 @@
   "disciplines": ["electrical", "equipment_supply"],
   "inventory_id": "DI-...",
   "reading_run_ids": ["RR-0001"],
+  "fact_extraction_run_ids": ["FER-0001"],
+  "project_package_ids": ["PKG-0001"],
+  "information_gap_ids": ["GAP-0001"],
+  "coordination_issue_ids": [],
+  "compliance_assessment_ids": ["RCA-0001"],
   "baseline_assessment_mode": "accepted_baseline",
   "baseline_snapshot_id": "BL-0001",
   "baseline_applicability_scope": "система освещения первого этажа",
@@ -73,7 +78,9 @@
 - `technical_alternative_assessments` содержит каждое обязательное направление технической альтернативы ровно один раз. Для `completed` нужны описание решения, применимость к проекту, преимущества, ограничения, влияние на исполнение, жизненный цикл, основания производительности, цены и реализуемости, рекомендация, источники и связанная `Alternative`.
 - `additional_model_checks` — открытый массив новых проверок, не перечисленных в обязательном контракте. Он не ограничен известным перечнем идентификаторов.
 - Каждый кандидат из `candidate_contractor_ids` и `candidate_supplier_ids` получает ровно одну запись `candidate_assessments` с видом стороны, статусом сопоставимости, основанием, недостающими данными и прямыми источниками.
-- `foreman_assessment` фиксирует вердикт, готовность, решающие причины, условия и действия владельца.
+- `foreman_assessment` фиксирует вердикт, готовность, точный `decision_request`, решающие причины, условия и действия владельца. `preferred_alternative_id` ссылается на зарегистрированную альтернативу либо остаётся пустым; `preferred_alternative_rationale` в обоих случаях объясняет основание предпочтения или его отсутствие.
+- `fact_extraction_run_ids` содержит завершённый запуск смыслового извлечения точной версии КП, а `project_package_ids` — хотя бы один применимый пакет. Пробелы и известные межпакетные коллизии связываются отдельными массивами.
+- `compliance_assessment_ids` содержит завершённые нормативные оценки, которыми закрывается `norms_and_specialist_boundary`. При доказанной неприменимости массив может быть пустым, а обязательный пункт получает `not_applicable` с источниками и объяснением.
 - `scope_boundary_matrix` покрывает каждую строку КП ровно один раз и для каждого блока назначает все роли из `scope_responsibility_roles`.
 - `constructability_walkthrough` покрывает каждую фазу `constructability_phases` ровно один раз.
 - `cost_exposure` хранит валюту, формулу, пять числовых полей или `null`, источники и неизвестные расходы.
@@ -85,6 +92,6 @@
 
 `disciplines` — открытый список применённых профилей, а не классификатор одного направления. В одном анализе допустимы несколько значений.
 
-`ready_for_owner` требует полной инвентаризации и чтения точной версии, классификации всех строк КП, полного покрытия выбранных применимых требований в `accepted_baseline` либо явного отделения справочного сравнения, отсутствия существенных блокеров, отдельного сопоставимого кандидата и совпадающего `completion_manifest`. `ready_for_contract` дополнительно требует `accepted_baseline`, условно положительного вердикта, проверяемого диапазона стоимости, закрытых проверок на объекте и завершённой оценки подрядчика. Ни одно из этих состояний не является решением владельца.
+`ready_for_owner` требует полной инвентаризации, чтения и смыслового извлечения точной версии, классификации всех строк КП, полного покрытия выбранных применимых требований в `accepted_baseline` либо явного отделения справочного сравнения, отсутствия существенных блокеров, отдельного сопоставимого кандидата и совпадающего `completion_manifest`. `ready_for_contract` дополнительно требует `accepted_baseline`, условно положительного вердикта, проверяемого диапазона стоимости, закрытых проверок на объекте и завершённой оценки подрядчика. Ни одно из этих состояний не является решением владельца.
 
 Полный перечень полей и допустимых идентификаторов берётся из машинного контракта; практический смысл разделов описан в [прорабской оценке](foreman-assessment.md).

@@ -64,6 +64,14 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     requirements = read_jsonl(control / "approved_requirements.jsonl", "requirement_id")
     findings = read_jsonl(control / "findings.jsonl", "finding_id")
     alternatives = read_jsonl(control / "alternatives.jsonl", "alternative_id")
+    compliance_assessments = read_jsonl(
+        control / "compliance_assessments.jsonl", "compliance_assessment_id"
+    )
+    compliance_results = read_jsonl(control / "compliance_results.jsonl", "compliance_result_id")
+    regulatory_requirements = read_jsonl(
+        control / "regulatory_requirements.jsonl", "regulatory_requirement_id"
+    )
+    norm_references = read_jsonl(control / "norm_references.jsonl", "norm_reference_id")
 
     quote = quotes.get(str(review.get("quote_id", "")), {})
     quote_items = [item for item in items.values() if item.get("quote_id") == review.get("quote_id")]
@@ -91,6 +99,27 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     )
     reference_comparisons = (
         review.get("reference_comparisons", []) if isinstance(review.get("reference_comparisons"), list) else []
+    )
+    review_compliance = [
+        compliance_assessments[value]
+        for value in review.get("compliance_assessment_ids", [])
+        if value in compliance_assessments
+    ]
+    normative_check = next(
+        (
+            value
+            for value in review.get("mandatory_checks", [])
+            if isinstance(value, dict) and value.get("check_id") == "norms_and_specialist_boundary"
+        ),
+        {},
+    )
+    regulatory_summary = (
+        "; ".join(
+            f"{value.get('compliance_assessment_id', '')}: {value.get('status', '')}"
+            for value in review_compliance
+        )
+        if review_compliance
+        else f"{normative_check.get('status', 'не выполнена')}: {normative_check.get('result', '')}"
     )
 
     positive = [
@@ -123,6 +152,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         if str(gap).strip()
     ]
     risk_lines = [
+        f"{risk.get('risk_id', 'без ID')} -> {risk.get('finding_id', 'без источника')}; "
         f"{risk.get('urgency', 'без срока')} / {', '.join(risk.get('impact_lanes', []))}: "
         f"{risk.get('consequence', '')}; действие: {risk.get('owner_action', '')}"
         for risk in priority_risks
@@ -140,90 +170,51 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         for item in cost.get("unknown_exposures", [])
         if isinstance(item, dict)
     ]
+    preferred_alternative_id = str(foreman.get("preferred_alternative_id", "")).strip()
+    preferred_alternative = alternatives.get(preferred_alternative_id, {})
+    preferred_label = (
+        f"`{preferred_alternative_id}` — "
+        f"{preferred_alternative.get('description', preferred_alternative.get('title', 'описание отсутствует'))}"
+        if preferred_alternative_id
+        else "доказанное предпочтение не выбрано"
+    )
+    conditions = [
+        *(f"До договора: {value}" for value in foreman.get("conditions_before_contract", [])),
+        *(f"До работ: {value}" for value in foreman.get("conditions_before_work", [])),
+    ]
+    evidence_coverage = (
+        "обязательные проверки закрыты"
+        if not incomplete_contract
+        else f"не закрыто пунктов: {len(incomplete_contract)}"
+    )
+    unresolved = [*blockers, *baseline_limitations, *unknown_costs, *open_site_checks]
+    executive_summary = f"""## Решение владельца — кратко
+
+- **Вердикт и готовность:** `{foreman.get('verdict', 'не сформирован')}`; `{foreman.get('decision_readiness', 'не определена')}`.
+- **Что нужно решить:** {foreman.get('decision_request', 'не сформулировано')}.
+- **Вывод:** {foreman.get('summary', 'не сформирован')}.
+- **Цена:** КП {amount_label(cost.get('quoted_total'), currency)}; расчётный диапазон {amount_label(cost.get('estimated_total_low'), currency)} — {amount_label(cost.get('estimated_total_high'), currency)}.
+- **Предпочтительный вариант:** {preferred_label}. Основание: {foreman.get('preferred_alternative_rationale', 'не сформировано')}.
+- **Нормативная проверка:** {regulatory_summary}.
+- **Покрытие доказательств:** {evidence_coverage}; базовый режим `{baseline_mode}`; открытых зависимых ограничений: {len(unresolved)}.
+
+### Три главных риска
+
+{bullets(risk_lines[:3])}
+
+### Три обязательных условия
+
+{bullets(conditions[:3])}
+
+### Ближайшие действия
+
+{bullets(foreman.get('owner_next_actions', [])[:3])}
+"""
     owner = f"""# Карточка решения по КП {review_id}
 
-## Прорабский вывод
+{executive_summary}
 
-- Состояние проверки: `{review.get('status', 'unknown')}`
-- Вердикт: `{foreman.get('verdict', 'не сформирован')}`
-- Готовность: `{foreman.get('decision_readiness', 'не определена')}`
-- Вывод: {foreman.get('summary', 'не сформирован')}
-- Документ: `{review.get('source_document_id', '')}`, версия `{review.get('document_version', '')}`
-- Направления: {', '.join(str(value) for value in disciplines) or 'не указаны'}
-- Коммерческая запись: `{review.get('quote_id', '')}`
-- Базовый режим: `{baseline_mode}`
-- Снимок базовой линии: `{baseline_snapshot_id or 'не принят'}`
-- Применённая область базы: {baseline_applicability_scope or 'не применяется'}
-
-### Решающие причины
-
-{bullets(foreman.get('decisive_reasons', []))}
-
-## Деньги
-
-- Заявлено в КП: {amount_label(cost.get('quoted_total'), currency)}
-- Подтверждённо включено: {amount_label(cost.get('confirmed_included_amount'), currency)}
-- Известно исключено: {amount_label(cost.get('known_excluded_amount'), currency)}
-- Расчётный диапазон полной стоимости: {amount_label(cost.get('estimated_total_low'), currency)} — {amount_label(cost.get('estimated_total_high'), currency)}
-- Статус расчёта: `{cost.get('status', 'не указан')}`
-
-### Пока нельзя посчитать
-
-{bullets(unknown_costs)}
-
-## Приоритетные риски
-
-{bullets(risk_lines)}
-
-Сводка: {review.get('risk_summary', 'не сформирована')}
-
-## Пробелы объёма и проверки на объекте
-
-{bullets(scope_gaps)}
-
-{bullets(open_site_checks)}
-
-## Существенные препятствия для решения
-
-{bullets(blockers)}
-
-## Ограничения из-за базовой линии
-
-{bullets(baseline_limitations)}
-
-## Незавершённые пункты обязательного контракта
-
-{bullets(incomplete_contract)}
-
-## Что в предложении подтверждено хорошо
-
-{bullets(positive)}
-
-## Основные замечания и риски
-
-{bullets(risks)}
-
-## Возможные варианты
-
-{bullets([value.get('description', value.get('title', value.get('alternative_id'))) for value in review_alternatives])}
-
-## Проверенные технические подходы
-
-{bullets(technical_options)}
-
-## Условия до договора
-
-{bullets(foreman.get('conditions_before_contract', []))}
-
-## Условия до начала работ
-
-{bullets(foreman.get('conditions_before_work', []))}
-
-## Следующие действия владельца
-
-{bullets(foreman.get('owner_next_actions', []))}
-
-Эта карточка не заменяет решение владельца и обязательную проверку профильным специалистом там, где она требуется.
+Полное обоснование: [full-dossier.md](full-dossier.md). Карточка не заменяет решение владельца и обязательную проверку профильным специалистом там, где она требуется.
 """
 
     request = f"""# Запрос подрядчику по КП {review.get('quote_id', '')}
@@ -361,6 +352,17 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         for item in priority_risks
         if isinstance(item, dict)
     ]
+    compliance_lines: list[str] = []
+    for assessment in review_compliance:
+        for result_id in assessment.get("result_ids", []):
+            result = compliance_results.get(result_id, {})
+            requirement = regulatory_requirements.get(str(result.get("requirement_id", "")), {})
+            norm = norm_references.get(str(requirement.get("norm_reference_id", "")), {})
+            compliance_lines.append(
+                f"`{result_id}`: {norm.get('designation', 'норма не указана')} "
+                f"{requirement.get('locator', '')} — применимость `{result.get('applicability_status', '')}`, "
+                f"результат `{result.get('compliance_status', '')}`; {result.get('basis', '')}"
+            )
     if baseline_mode == "accepted_baseline":
         baseline_matrix_section = f"""## Матрица принятой базовой линии и КП
 
@@ -371,6 +373,8 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 Не оценивалось: применяемая базовая линия не принята. Сопоставления с документами выше имеют только справочный статус."""
     dossier = f"""# Полное досье проверки КП {review_id}
 
+{executive_summary}
+
 ## Объект проверки и прослеживаемость
 
 - Документ: `{review.get('source_document_id', '')}`
@@ -378,6 +382,11 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - SHA-256: `{review.get('sha256', '')}`
 - Инвентаризация: `{review.get('inventory_id', '')}`
 - Журналы чтения: {', '.join(review.get('reading_run_ids', []))}
+- Журналы извлечения фактов: {', '.join(review.get('fact_extraction_run_ids', []))}
+- Пакеты проекта: {', '.join(review.get('project_package_ids', []))}
+- Пробелы данных: {', '.join(review.get('information_gap_ids', [])) or 'нет'}
+- Межпакетные коллизии: {', '.join(review.get('coordination_issue_ids', [])) or 'нет'}
+- Нормативные оценки: {', '.join(review.get('compliance_assessment_ids', [])) or 'не зарегистрированы'}
 - Направления: {', '.join(str(value) for value in disciplines)}
 - Базовый режим: `{baseline_mode}`
 - Снимок базовой линии: `{baseline_snapshot_id or 'не принят'}`
@@ -408,6 +417,10 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 {baseline_matrix_section}
 
 Непривязанные строки КП: {', '.join(review.get('unmatched_quote_item_ids', [])) or 'нет'}.
+
+## Нормативное соответствие
+
+{bullets(compliance_lines, empty=regulatory_summary)}
 
 ## Профессиональные технические проверки
 

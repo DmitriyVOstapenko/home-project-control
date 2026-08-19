@@ -1,0 +1,44 @@
+{
+  "catalog_id": "home-project-control-ru-official-regulatory-sources",
+  "schema_version": "1.0",
+  "jurisdiction": "RU",
+  "sources": [
+    {
+      "source_id": "rosstandart-federal-fund",
+      "authority": "Федеральное агентство по техническому регулированию и метрологии",
+      "name": "Федеральный информационный фонд стандартов",
+      "url": "https://protect.gost.ru/gost?month=0&year=0",
+      "authoritative_for": ["designation", "document_status", "replacement", "publication_metadata"],
+      "check_mode": "html_visible_text"
+    },
+    {
+      "source_id": "minstroy-documents",
+      "authority": "Министерство строительства и жилищно-коммунального хозяйства Российской Федерации",
+      "name": "Документы Минстроя России",
+      "url": "https://www.minstroyrf.gov.ru/docs/",
+      "authoritative_for": ["code_of_rules", "amendments", "estimate_norms", "ministry_documents"],
+      "check_mode": "html_visible_text"
+    },
+    {
+      "source_id": "official-legal-publication-minstroy",
+      "authority": "Официальный интернет-портал правовой информации",
+      "name": "Официально опубликованные акты Минстроя России",
+      "url": "https://publication.pravo.gov.ru/documents/block/foiv274",
+      "authoritative_for": ["legal_act_publication", "effective_date", "amendment", "repeal"],
+      "check_mode": "html_visible_text"
+    },
+    {
+      "source_id": "government-requirements-register-rules",
+      "authority": "Правительство Российской Федерации",
+      "name": "Правила формирования и ведения реестра требований",
+      "url": "https://government.ru/docs/all/149390/",
+      "authoritative_for": ["requirements_register_rules"],
+      "check_mode": "html_visible_text"
+    }
+  ],
+  "limitations": [
+    "Изменение страницы является сигналом для проверки, а не доказательством изменения конкретной нормы.",
+    "Каталог источников не определяет применимость документа к конкретному объекту, этапу или договору.",
+    "Полный текст документа используется только из законно доступного источника или из файла, предоставленного пользователем."
+  ]
+}

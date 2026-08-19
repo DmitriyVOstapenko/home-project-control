@@ -20,9 +20,13 @@ INGEST = SCRIPT_ROOT / "ingest_documents.py"
 AUDIT = SCRIPT_ROOT / "audit_project.py"
 INVENTORY = SCRIPT_ROOT / "inventory_document.py"
 RECORD_BASELINE = SCRIPT_ROOT / "record_baseline_snapshot.py"
+RECORD_ANALYSIS = SCRIPT_ROOT / "record_analysis_cycle.py"
 PROPOSAL_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "review-contractor-proposal" / "scripts"
 RECORD_PROPOSAL = PROPOSAL_SCRIPT_ROOT / "record_proposal_review.py"
 BUILD_DOSSIER = PROPOSAL_SCRIPT_ROOT / "build_proposal_dossier.py"
+REGULATORY_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "check-regulatory-compliance" / "scripts"
+RECORD_REGULATORY = REGULATORY_SCRIPT_ROOT / "record_regulatory_assessment.py"
+CHECK_REGULATORY_UPDATES = REGULATORY_SCRIPT_ROOT / "check_regulatory_updates.py"
 DASHBOARD = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "track-progress-and-cost" / "scripts" / "build_dashboard.py"
 STRUCTURE = json.loads(
     (REPO_ROOT / "plugins" / "home-project-control" / "schemas" / "project-structure.json").read_text(
@@ -101,6 +105,20 @@ def create_legacy_project(project: Path, version: str) -> None:
                 {"equipment_option_id": "EO-LEGACY", "description": "candidate, not installed"},
                 ensure_ascii=False,
             ) + "\n"
+        elif path.name == "norm_references.jsonl":
+            content = json.dumps(
+                {
+                    "norm_reference_id": "NR-LEGACY",
+                    "title": "Legacy normative reference",
+                    "version": "legacy edition",
+                    "territory": "legacy territory",
+                    "checked_at": "2026-01-01",
+                    "locator": "legacy clause",
+                    "source_url": "https://example.test/legacy-norm",
+                    "scope": "legacy scope",
+                },
+                ensure_ascii=False,
+            ) + "\n"
         else:
             content = ""
         path.write_text(content, encoding="utf-8")
@@ -145,6 +163,7 @@ def complete_proposal_contract(
     quote_item_ids: list[str],
     requirement_ids: list[str],
     finding_ids: list[str],
+    compliance_assessment_ids: list[str],
 ) -> dict:
     def observations(statement: str) -> list[dict]:
         return [{
@@ -164,6 +183,10 @@ def complete_proposal_contract(
         }
         for definition in PROPOSAL_CONTRACT["universal_checks"]
     ]
+    for item in mandatory:
+        if item["check_id"] == "norms_and_specialist_boundary":
+            item["source_ids"] = [*source_ids, *compliance_assessment_ids]
+            item["observations"][0]["source_ids"] = [*source_ids, *compliance_assessment_ids]
     discipline_checks = [
         {
             "discipline": discipline,
@@ -273,6 +296,9 @@ def complete_proposal_contract(
             "verdict": "conditionally_recommended",
             "decision_readiness": "ready_for_contract",
             "summary": "Тестовое предложение можно рассматривать при закреплении гарантии и критериев приёмки.",
+            "decision_request": "Решить, запрашивать ли уточнённую редакцию КП на указанных условиях",
+            "preferred_alternative_id": "ALT-OPT",
+            "preferred_alternative_rationale": "Оптимизация исходного решения требует наименьшего изменения подтверждённого объёма.",
             "decisive_reasons": ["объём и арифметика сопоставлены", "приёмка измерима"],
             "conditions_before_contract": ["закрепить гарантию"],
             "conditions_before_work": ["подтвердить готовность зоны"],
@@ -314,6 +340,69 @@ def complete_proposal_contract(
     }
 
 
+def regulatory_test_package(target_id: str, fact_id: str) -> dict:
+    return {
+        "schema_version": "1.0",
+        "norm_references": [{
+            "norm_reference_id": "NR-1",
+            "designation": "СП TEST-2026",
+            "title": "Тестовые требования к монтажу освещения",
+            "version": "2026",
+            "document_kind": "code_of_rules",
+            "document_status": "active",
+            "jurisdiction": "RU",
+            "territory": "Российская Федерация",
+            "checked_at": "2026-08-19",
+            "status_source_url": "https://example.test/norm-status",
+            "source_url": "https://example.test/norm-text",
+            "scope": "Монтаж освещения в тестовой зоне",
+            "supersedes_norm_reference_ids": [],
+            "replacement_norm_reference_ids": [],
+        }],
+        "regulatory_requirements": [{
+            "regulatory_requirement_id": "RQR-1",
+            "norm_reference_id": "NR-1",
+            "locator": "пункт 1.1",
+            "statement": "Результат монтажа должен быть проверяемым",
+            "scope_conditions": "При монтаже освещения в тестовой зоне",
+            "verification_method": "Функциональная проверка",
+            "specialist_boundary": "Электробезопасность подтверждает профильный специалист",
+            "source_url": "https://example.test/norm-text#p1",
+            "extracted_at": "2026-08-19",
+            "verification_status": "verified",
+        }],
+        "compliance_assessments": [{
+            "compliance_assessment_id": "RCA-1",
+            "assessment_type": "contractor_proposal",
+            "jurisdiction": "RU",
+            "scope": "Монтаж освещения в тестовой зоне",
+            "assessed_at": "2026-08-19",
+            "status": "complete",
+            "target_entity_ids": [target_id],
+            "norm_reference_ids": ["NR-1"],
+            "expected_requirement_ids": ["RQR-1"],
+            "checked_requirement_ids": ["RQR-1"],
+            "result_ids": ["RCR-1"],
+            "information_gap_ids": [],
+            "limitations": ["Проектные расчёты и измерения профильного специалиста не представлены"],
+        }],
+        "compliance_results": [{
+            "compliance_result_id": "RCR-1",
+            "assessment_id": "RCA-1",
+            "requirement_id": "RQR-1",
+            "target_entity_ids": [target_id],
+            "applicability_status": "applicable_by_project",
+            "compliance_status": "conforms",
+            "basis": "Проверяемый результат следует из зарегистрированного факта",
+            "checked_at": "2026-08-19",
+            "evidence_fact_ids": [fact_id],
+            "finding_ids": [],
+            "information_gap_ids": [],
+        }],
+        "regulatory_sync_runs": [],
+    }
+
+
 class ProjectToolsTest(unittest.TestCase):
     def test_new_project_passes_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -339,6 +428,14 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue((project / ".home-control" / "asset_events.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "document_inventories.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "proposal_reviews.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "project_packages.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "fact_extraction_runs.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "information_gaps.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "coordination_runs.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "regulatory_requirements.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "compliance_assessments.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "compliance_results.jsonl").is_file())
+            self.assertTrue((project / ".home-control" / "regulatory_sync_runs.jsonl").is_file())
             self.assertTrue((project / ".home-control" / "reports" / "proposals").is_dir())
 
     def test_audit_reports_duplicate_document_ids(self) -> None:
@@ -365,8 +462,252 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(audited.returncode, 1, audited.stderr)
             self.assertIn("duplicate document_id duplicate-document", audited.stdout)
 
-    def test_real_v1_v2_v3_and_v4_projects_migrate_without_losing_existing_data(self) -> None:
-        for version in ("1.0", "2.0", "3.0", "4.0"):
+    def test_analysis_cycle_package_previews_validates_and_appends_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            package = {
+                "schema_version": "1.0",
+                "facts": [{
+                    "fact_id": "F-PKG-1",
+                    "statement": "Владелец определил пакет проверки электроснабжения",
+                    "statement_kind": "source_fact",
+                    "evidence_origin": "owner_confirmation",
+                    "verification_status": "verified",
+                    "locator": "тестовая задача, сообщение владельца",
+                    "recorded_at": "2026-08-19",
+                    "discipline_ids": ["electrical"],
+                    "package_ids": ["PKG-POWER"],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "system_ids": [],
+                }],
+                "project_packages": [{
+                    "package_id": "PKG-POWER",
+                    "name": "Проверка электроснабжения",
+                    "goal": "Определить достаточность исходных данных",
+                    "status": "in_analysis",
+                    "disciplines": ["electrical"],
+                    "source_document_versions": [],
+                    "fact_ids": ["F-PKG-1"],
+                    "requirement_ids": [],
+                    "information_gap_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "system_ids": [],
+                }],
+            }
+            path = project / "analysis-package.json"
+            path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+            facts_path = project / ".home-control" / "facts.jsonl"
+            before = facts_path.read_bytes()
+
+            preview = run_script(RECORD_ANALYSIS, project, path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertEqual(facts_path.read_bytes(), before)
+            self.assertEqual(json.loads(preview.stdout)["append"]["facts"], 1)
+
+            applied = run_script(RECORD_ANALYSIS, project, path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertIn("F-PKG-1", facts_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            invalid = json.loads(json.dumps(package))
+            invalid["facts"][0]["fact_id"] = "F-PKG-BAD"
+            invalid["facts"][0]["package_ids"] = ["PKG-POWER"]
+            invalid["facts"][0].pop("locator")
+            invalid_path = project / "invalid-analysis-package.json"
+            invalid_path.write_text(json.dumps(invalid, ensure_ascii=False), encoding="utf-8")
+            rejected = run_script(RECORD_ANALYSIS, project, invalid_path)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("missing required field locator", rejected.stderr)
+
+    def test_regulatory_package_previews_validates_and_appends_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            control = project / ".home-control"
+            fact = {
+                "fact_id": "F-REG-1",
+                "statement": "Владелец подтвердил тестовый объект нормативной проверки",
+                "statement_kind": "source_fact",
+                "evidence_origin": "owner_confirmation",
+                "verification_status": "verified",
+                "locator": "тестовая задача, сообщение владельца",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            write_jsonl(control / "facts.jsonl", fact)
+            package = {
+                "schema_version": "1.0",
+                "norm_references": [{
+                    "norm_reference_id": "NR-TEST-1",
+                    "designation": "ГОСТ Р TEST-2026",
+                    "title": "Тестовый нормативный документ",
+                    "version": "2026",
+                    "document_kind": "national_standard",
+                    "document_status": "active",
+                    "jurisdiction": "RU",
+                    "territory": "Российская Федерация",
+                    "checked_at": "2026-08-19",
+                    "status_source_url": "https://example.test/status",
+                    "source_url": "https://example.test/text",
+                    "scope": "Тестовая электрическая установка",
+                    "supersedes_norm_reference_ids": [],
+                    "replacement_norm_reference_ids": [],
+                }],
+                "regulatory_requirements": [{
+                    "regulatory_requirement_id": "RQR-TEST-1",
+                    "norm_reference_id": "NR-TEST-1",
+                    "locator": "пункт 1.1",
+                    "statement": "Проверить тестовый параметр",
+                    "scope_conditions": "Только для тестовой электрической установки",
+                    "verification_method": "Документальная проверка",
+                    "specialist_boundary": "Проектное решение подтверждает профильный специалист",
+                    "source_url": "https://example.test/text#p1",
+                    "extracted_at": "2026-08-19",
+                    "verification_status": "verified",
+                }],
+                "compliance_assessments": [{
+                    "compliance_assessment_id": "RCA-TEST-1",
+                    "assessment_type": "project_solution",
+                    "jurisdiction": "RU",
+                    "scope": "Тестовая электрическая установка",
+                    "assessed_at": "2026-08-19",
+                    "status": "complete",
+                    "target_entity_ids": ["F-REG-1"],
+                    "norm_reference_ids": ["NR-TEST-1"],
+                    "expected_requirement_ids": ["RQR-TEST-1"],
+                    "checked_requirement_ids": ["RQR-TEST-1"],
+                    "result_ids": ["RCR-TEST-1"],
+                    "information_gap_ids": [],
+                    "limitations": ["Тест не заменяет заключение профильного специалиста"],
+                }],
+                "compliance_results": [{
+                    "compliance_result_id": "RCR-TEST-1",
+                    "assessment_id": "RCA-TEST-1",
+                    "requirement_id": "RQR-TEST-1",
+                    "target_entity_ids": ["F-REG-1"],
+                    "applicability_status": "applicable_by_project",
+                    "compliance_status": "conforms",
+                    "basis": "Подтверждено зарегистрированным фактом",
+                    "checked_at": "2026-08-19",
+                    "evidence_fact_ids": ["F-REG-1"],
+                    "finding_ids": [],
+                    "information_gap_ids": [],
+                }],
+                "regulatory_sync_runs": [],
+            }
+            path = project / "regulatory-package.json"
+            path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+            target = control / "compliance_assessments.jsonl"
+            before = target.read_bytes()
+
+            preview = run_script(RECORD_REGULATORY, project, path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertEqual(json.loads(preview.stdout)["append"]["compliance_assessments"], 1)
+
+            applied = run_script(RECORD_REGULATORY, project, path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertIn("RCA-TEST-1", target.read_text(encoding="utf-8"))
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            invalid = json.loads(json.dumps(package))
+            invalid["norm_references"] = []
+            invalid["regulatory_requirements"] = []
+            invalid["compliance_results"] = []
+            invalid["compliance_assessments"][0].update({
+                "compliance_assessment_id": "RCA-TEST-BAD",
+                "result_ids": [],
+            })
+            invalid_path = project / "invalid-regulatory-package.json"
+            invalid_path.write_text(json.dumps(invalid, ensure_ascii=False), encoding="utf-8")
+            rejected = run_script(RECORD_REGULATORY, project, invalid_path)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("one result per requirement", rejected.stderr)
+            self.assertNotIn("RCA-TEST-BAD", target.read_text(encoding="utf-8"))
+
+    def test_regulatory_source_checker_detects_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "official-source.html"
+            source.write_text(
+                "<html><body>version one<script>token-one</script></body></html>",
+                encoding="utf-8",
+            )
+            catalog = root / "catalog.json"
+            catalog.write_text(
+                json.dumps({
+                    "schema_version": "1.0",
+                    "catalog_id": "test-regulatory-sources",
+                    "jurisdiction": "RU",
+                    "sources": [{
+                        "source_id": "official-test",
+                        "url": source.as_uri(),
+                        "check_mode": "html_visible_text",
+                    }],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            state = root / "state.json"
+            report = root / "report.md"
+
+            baseline = run_script(
+                CHECK_REGULATORY_UPDATES,
+                "--catalog", catalog,
+                "--state", state,
+                "--report", report,
+                "--write-state",
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stderr)
+            self.assertTrue(json.loads(baseline.stdout)["changed"])
+            self.assertTrue(state.is_file())
+            self.assertIn("baseline_created", report.read_text(encoding="utf-8"))
+
+            unchanged = run_script(
+                CHECK_REGULATORY_UPDATES,
+                "--catalog", catalog,
+                "--state", state,
+                "--write-state",
+            )
+            self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+            self.assertFalse(json.loads(unchanged.stdout)["changed"])
+
+            source.write_text(
+                "<html><body>version one<script>token-two</script></body></html>",
+                encoding="utf-8",
+            )
+            script_only_change = run_script(
+                CHECK_REGULATORY_UPDATES,
+                "--catalog", catalog,
+                "--state", state,
+                "--write-state",
+            )
+            self.assertEqual(script_only_change.returncode, 0, script_only_change.stderr)
+            self.assertFalse(json.loads(script_only_change.stdout)["changed"])
+
+            source.write_text(
+                "<html><body>version two<script>token-three</script></body></html>",
+                encoding="utf-8",
+            )
+            changed = run_script(
+                CHECK_REGULATORY_UPDATES,
+                "--catalog", catalog,
+                "--state", state,
+                "--write-state",
+            )
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            changed_result = json.loads(changed.stdout)
+            self.assertTrue(changed_result["changed"])
+            self.assertEqual(changed_result["source_checks"][0]["change_status"], "changed")
+
+    def test_real_v1_through_v6_projects_migrate_without_losing_existing_data(self) -> None:
+        for version in ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 create_legacy_project(project, version)
@@ -387,6 +728,8 @@ class ProjectToolsTest(unittest.TestCase):
                     "2.0": "assets.jsonl",
                     "3.0": "proposal_reviews.jsonl",
                     "4.0": "baseline_snapshots.jsonl",
+                    "5.0": "project_packages.jsonl",
+                    "6.0": "regulatory_requirements.jsonl",
                 }[version]
                 self.assertIn(expected_added_registry, preview.stdout)
                 self.assertIn("update_project_marker_version", preview.stdout)
@@ -442,7 +785,7 @@ class ProjectToolsTest(unittest.TestCase):
         self.assertIn("inside the plugin distribution", refused.stderr)
 
     def test_unknown_older_and_newer_versions_are_blocked(self) -> None:
-        for version, expected in (("1.5", "No supported migration"), ("6.0", "Refusing to downgrade")):
+        for version, expected in (("1.5", "No supported migration"), ("8.0", "Refusing to downgrade")):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 self.assertEqual(run_script(INIT, project).returncode, 0)
@@ -912,6 +1255,13 @@ class ProjectToolsTest(unittest.TestCase):
                     "statement_kind": "source_fact",
                     "evidence_origin": "owner_confirmation",
                     "verification_status": "verified",
+                    "locator": "тестовая задача, сообщение владельца",
+                    "recorded_at": "2026-08-19",
+                    "discipline_ids": [],
+                    "package_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "system_ids": [],
                 },
             )
             write_jsonl(
@@ -1032,9 +1382,140 @@ class ProjectToolsTest(unittest.TestCase):
                     "status": "identified",
                 },
             )
+            write_jsonl(
+                control / "project_packages.jsonl",
+                {
+                    "package_id": "PKG-A",
+                    "name": "Пакет автоматики",
+                    "goal": "Обновить контроллер",
+                    "status": "coordinating",
+                    "disciplines": ["automation", "electrical"],
+                    "source_document_versions": [],
+                    "fact_ids": ["F-1"],
+                    "requirement_ids": [],
+                    "information_gap_ids": ["GAP-1"],
+                    "site_ids": ["SITE-1"],
+                    "zone_ids": ["ZONE-1"],
+                    "system_ids": ["SYS-1"],
+                },
+                {
+                    "package_id": "PKG-B",
+                    "name": "Пакет электропитания",
+                    "goal": "Обеспечить питание оборудования",
+                    "status": "coordinating",
+                    "disciplines": ["electrical"],
+                    "source_document_versions": [],
+                    "fact_ids": ["F-1"],
+                    "requirement_ids": [],
+                    "information_gap_ids": [],
+                    "site_ids": ["SITE-1"],
+                    "zone_ids": ["ZONE-1"],
+                    "system_ids": ["SYS-1"],
+                },
+            )
+            write_jsonl(
+                control / "information_gaps.jsonl",
+                {
+                    "gap_id": "GAP-1",
+                    "description": "Не подтверждена требуемая мощность контроллера",
+                    "blocked_conclusion": "Достаточность электрической мощности",
+                    "required_provider": "производитель оборудования",
+                    "required_format": "официальный паспорт",
+                    "status": "requested",
+                    "package_ids": ["PKG-A"],
+                    "blocked_entity_ids": ["RDM-A"],
+                    "answer_source_ids": [],
+                },
+            )
+            write_jsonl(
+                control / "shared_resources.jsonl",
+                {
+                    "resource_id": "RES-POWER",
+                    "name": "Доступная электрическая мощность",
+                    "resource_type": "electrical_capacity",
+                    "site_id": "SITE-1",
+                    "zone_ids": ["ZONE-1"],
+                    "source_fact_ids": ["F-1"],
+                },
+            )
+            write_jsonl(
+                control / "resource_demands.jsonl",
+                {
+                    "demand_id": "RDM-A",
+                    "package_id": "PKG-A",
+                    "resource_id": "RES-POWER",
+                    "description": "Мощность нового контроллера",
+                    "status": "candidate",
+                    "source_fact_ids": [],
+                    "information_gap_ids": ["GAP-1"],
+                },
+                {
+                    "demand_id": "RDM-B",
+                    "package_id": "PKG-B",
+                    "resource_id": "RES-POWER",
+                    "description": "Резерв питания для автоматики",
+                    "status": "confirmed",
+                    "source_fact_ids": ["F-1"],
+                    "information_gap_ids": [],
+                },
+            )
+            write_jsonl(
+                control / "package_interfaces.jsonl",
+                {
+                    "package_interface_id": "PIF-1",
+                    "package_ids": ["PKG-A", "PKG-B"],
+                    "interface_type": "shared_resource",
+                    "description": "Оба пакета используют общий резерв мощности",
+                    "resource_ids": ["RES-POWER"],
+                    "source_fact_ids": ["F-1"],
+                },
+            )
+            write_jsonl(
+                control / "coordination_issues.jsonl",
+                {
+                    "coordination_issue_id": "CI-1",
+                    "package_ids": ["PKG-A", "PKG-B"],
+                    "issue_type": "capacity_shortfall",
+                    "status": "under_review",
+                    "description": "Достаточность общего резерва пока не подтверждена",
+                    "resource_ids": ["RES-POWER"],
+                    "source_fact_ids": ["F-1"],
+                    "information_gap_ids": ["GAP-1"],
+                },
+            )
+            write_jsonl(
+                control / "coordination_runs.jsonl",
+                {
+                    "coordination_run_id": "CR-1",
+                    "status": "complete",
+                    "package_ids": ["PKG-A", "PKG-B"],
+                    "expected_package_pairs": [["PKG-A", "PKG-B"]],
+                    "checked_package_pairs": [["PKG-B", "PKG-A"]],
+                    "resource_demand_ids": ["RDM-A", "RDM-B"],
+                    "issue_ids": ["CI-1"],
+                    "coverage_gaps": [],
+                },
+            )
 
             audited = run_script(AUDIT, project)
             self.assertEqual(audited.returncode, 0, audited.stdout + audited.stderr)
+
+            write_jsonl(
+                control / "coordination_runs.jsonl",
+                {
+                    "coordination_run_id": "CR-1",
+                    "status": "complete",
+                    "package_ids": ["PKG-A", "PKG-B"],
+                    "expected_package_pairs": [["PKG-A", "PKG-B"]],
+                    "checked_package_pairs": [],
+                    "resource_demand_ids": ["RDM-A", "RDM-B"],
+                    "issue_ids": ["CI-1"],
+                    "coverage_gaps": [],
+                },
+            )
+            invalid_coordination = run_script(AUDIT, project)
+            self.assertEqual(invalid_coordination.returncode, 1, invalid_coordination.stderr)
+            self.assertIn("complete coordination run has unresolved", invalid_coordination.stdout)
 
     def test_audit_rejects_physical_records_without_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1366,6 +1847,12 @@ class ProjectToolsTest(unittest.TestCase):
                 "document_version": 1,
                 "sha256": baseline_document["sha256"],
                 "locator": "строка 1, полное предложение",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
             }
             requirement = {
                 "requirement_id": "AR-1",
@@ -1385,6 +1872,12 @@ class ProjectToolsTest(unittest.TestCase):
                 "evidence_origin": "owner_confirmation",
                 "verification_status": "verified",
                 "locator": "решение владельца от 2026-08-19, пункт 2",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
             }
             unrelated_requirement = {
                 "requirement_id": "AR-2",
@@ -1487,17 +1980,90 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(baseline_preview.returncode, 0, baseline_preview.stderr)
             baseline_applied = run_script(RECORD_BASELINE, project, baseline_package_path, "--apply")
             self.assertEqual(baseline_applied.returncode, 0, baseline_applied.stderr)
+            regulatory_path = project / "proposal-regulatory-package.json"
+            regulatory_path.write_text(
+                json.dumps(
+                    regulatory_test_package(document["document_id"], "F-REQ-1"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            regulatory_applied = run_script(RECORD_REGULATORY, project, regulatory_path, "--apply")
+            self.assertEqual(regulatory_applied.returncode, 0, regulatory_applied.stderr)
+            quote_fact = {
+                "fact_id": "F-QUOTE-1",
+                "statement": "КП предлагает два светильника по 1000 рублей с монтажом",
+                "statement_kind": "source_fact",
+                "evidence_origin": "contractor_proposal",
+                "verification_status": "verified",
+                "source_document_id": document["document_id"],
+                "document_version": 1,
+                "sha256": document["sha256"],
+                "locator": "строки 1-2",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical", "equipment_supply"],
+                "package_ids": ["PKG-1"],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
             package = {
                 "schema_version": "1.0",
+                "facts": [quote_fact],
                 "reading_runs": [{
                     "reading_run_id": "RR-OFFER-1",
                     "source_document_id": document["document_id"],
                     "document_version": 1,
                     "sha256": document["sha256"],
                     "status": "complete",
-                    "coverage": {"expected_units": [1, 2], "checked_units": [1, 2], "gaps": []},
+                    "coverage": {
+                        "expected_units": [1, 2],
+                        "checked_units": [1, 2],
+                        "checked_requirements": inventory["reading_requirements"],
+                        "gaps": [],
+                    },
                     "summary_path": ".home-control/summaries/mixed-offer-v1.md",
                 }],
+                "project_packages": [{
+                    "package_id": "PKG-1",
+                    "name": "Поставка и монтаж освещения тестовой зоны",
+                    "goal": "Получить два установленных и проверенных светильника",
+                    "status": "in_analysis",
+                    "disciplines": ["electrical", "equipment_supply"],
+                    "source_document_versions": [{
+                        "document_id": document["document_id"],
+                        "document_version": 1,
+                        "sha256": document["sha256"],
+                    }],
+                    "fact_ids": ["F-QUOTE-1"],
+                    "requirement_ids": ["AR-1"],
+                    "information_gap_ids": [],
+                    "site_ids": [],
+                    "zone_ids": [],
+                    "system_ids": [],
+                }],
+                "fact_extraction_runs": [{
+                    "extraction_run_id": "FER-OFFER-1",
+                    "source_document_id": document["document_id"],
+                    "document_version": 1,
+                    "sha256": document["sha256"],
+                    "reading_run_id": "RR-OFFER-1",
+                    "expected_sections": ["предмет и объём", "цена и условия"],
+                    "checked_sections": ["предмет и объём", "цена и условия"],
+                    "coverage_gaps": [],
+                    "fact_ids": ["F-QUOTE-1"],
+                    "requirement_ids": [],
+                    "information_gap_ids": [],
+                    "conflict_fact_ids": [],
+                    "status": "complete",
+                }],
+                "information_gaps": [],
+                "shared_resources": [],
+                "resource_demands": [],
+                "package_interfaces": [],
+                "coordination_issues": [],
+                "coordination_runs": [],
                 "contractors": [
                     {"contractor_id": "CTR-1", "name": "Подрядчик из проверяемого КП"},
                     {"contractor_id": "CTR-2", "name": "Отдельный сопоставимый кандидат"},
@@ -1544,6 +2110,11 @@ class ProjectToolsTest(unittest.TestCase):
                     "document_version": 1, "sha256": document["sha256"], "quote_id": "Q-1",
                     "status": "ready_for_owner", "disciplines": ["electrical", "equipment_supply"],
                     "inventory_id": inventory["inventory_id"], "reading_run_ids": ["RR-OFFER-1"],
+                    "fact_extraction_run_ids": ["FER-OFFER-1"],
+                    "project_package_ids": ["PKG-1"],
+                    "information_gap_ids": [],
+                    "coordination_issue_ids": [],
+                    "compliance_assessment_ids": ["RCA-1"],
                     "baseline_assessment_mode": "accepted_baseline",
                     "baseline_snapshot_id": "BL-1",
                     "baseline_applicability_scope": "тестовая зона, поставка и монтаж освещения",
@@ -1592,6 +2163,7 @@ class ProjectToolsTest(unittest.TestCase):
                         ["QI-1"],
                         ["AR-1"],
                         ["FN-1"],
+                        ["RCA-1"],
                     ),
                 }],
             }
@@ -1624,6 +2196,40 @@ class ProjectToolsTest(unittest.TestCase):
                 encoding="utf-8",
             )
             write_jsonl(reference_control / "reading_runs.jsonl", baseline_run)
+            reference_norm_fact = {
+                "fact_id": "F-NORM-REF",
+                "statement": "КП описывает монтаж освещения с проверяемым результатом",
+                "statement_kind": "source_fact",
+                "evidence_origin": "contractor_proposal",
+                "verification_status": "verified",
+                "source_document_id": document["document_id"],
+                "document_version": 1,
+                "sha256": document["sha256"],
+                "locator": "строки 1-2",
+                "recorded_at": "2026-08-19",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            write_jsonl(reference_control / "facts.jsonl", reference_norm_fact)
+            reference_regulatory_path = reference_project / "proposal-regulatory-package.json"
+            reference_regulatory_path.write_text(
+                json.dumps(
+                    regulatory_test_package(document["document_id"], "F-NORM-REF"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            reference_regulatory = run_script(
+                RECORD_REGULATORY,
+                reference_project,
+                reference_regulatory_path,
+                "--apply",
+            )
+            self.assertEqual(reference_regulatory.returncode, 0, reference_regulatory.stderr)
 
             reference_package = json.loads(json.dumps(package))
 
@@ -1695,6 +2301,17 @@ class ProjectToolsTest(unittest.TestCase):
             package_path = project / "proposal-package.json"
             package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 
+            incomplete_extraction = json.loads(json.dumps(package))
+            incomplete_extraction["fact_extraction_runs"][0]["checked_sections"] = ["предмет и объём"]
+            incomplete_extraction_path = project / "incomplete-extraction-package.json"
+            incomplete_extraction_path.write_text(
+                json.dumps(incomplete_extraction, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            rejected_extraction = run_script(RECORD_PROPOSAL, project, incomplete_extraction_path)
+            self.assertEqual(rejected_extraction.returncode, 2)
+            self.assertIn("semantic", rejected_extraction.stderr.lower())
+
             invalid_existing_run = json.loads(json.dumps(package["reading_runs"][0]))
             invalid_existing_run["coverage"]["checked_units"] = [1]
             write_jsonl(control / "reading_runs.jsonl", invalid_existing_run)
@@ -1714,6 +2331,16 @@ class ProjectToolsTest(unittest.TestCase):
             rejected = run_script(RECORD_PROPOSAL, project, invalid_path)
             self.assertEqual(rejected.returncode, 2)
             self.assertEqual((control / "proposal_reviews.jsonl").read_text(encoding="utf-8"), "")
+
+            missing_compliance = json.loads(json.dumps(package))
+            missing_compliance["proposal_reviews"][0]["compliance_assessment_ids"] = []
+            missing_compliance_path = project / "missing-compliance-assessment.json"
+            missing_compliance_path.write_text(
+                json.dumps(missing_compliance, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_compliance = run_script(RECORD_PROPOSAL, project, missing_compliance_path)
+            self.assertEqual(rejected_compliance.returncode, 2)
+            self.assertIn("normative check needs a ComplianceAssessment", rejected_compliance.stderr)
 
             missing_alternative = json.loads(json.dumps(package))
             missing_alternative["proposal_reviews"][0]["technical_alternative_assessments"] = [
@@ -1850,6 +2477,12 @@ class ProjectToolsTest(unittest.TestCase):
                 {"owner-card.md", "contractor-request.md", "full-dossier.md"},
             )
             dossier_text = (target / "full-dossier.md").read_text(encoding="utf-8")
+            owner_text = (target / "owner-card.md").read_text(encoding="utf-8")
+            owner_summary = owner_text.split("\n\nПолное обоснование:", 1)[0].split("\n\n", 1)[1]
+            self.assertIn(owner_summary, dossier_text)
+            self.assertEqual(owner_text.count("## Решение владельца — кратко"), 1)
+            self.assertIn("Что нужно решить", owner_text)
+            self.assertIn("`ALT-OPT`", owner_text)
             self.assertIn("electrical, equipment_supply", dossier_text)
             self.assertIn("## Альтернативные технические решения", dossier_text)
             self.assertIn("different_technical_principle", dossier_text)
@@ -1857,6 +2490,8 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("## Прорабский вывод", dossier_text)
             self.assertIn("## Границы объёма и ответственности", dossier_text)
             self.assertIn("## Полная денежная экспозиция", dossier_text)
+            self.assertIn("## Нормативное соответствие", dossier_text)
+            self.assertIn("RCA-1", dossier_text)
             refused = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
             self.assertEqual(refused.returncode, 2)
             escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")

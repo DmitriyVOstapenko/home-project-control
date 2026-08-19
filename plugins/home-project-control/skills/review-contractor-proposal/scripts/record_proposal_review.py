@@ -37,6 +37,14 @@ REGISTRY_KEYS = {
     "norm_references": ("norm_references.jsonl", "norm_reference_id"),
     "findings": ("findings.jsonl", "finding_id"),
     "alternatives": ("alternatives.jsonl", "alternative_id"),
+    "project_packages": ("project_packages.jsonl", "package_id"),
+    "fact_extraction_runs": ("fact_extraction_runs.jsonl", "extraction_run_id"),
+    "information_gaps": ("information_gaps.jsonl", "gap_id"),
+    "shared_resources": ("shared_resources.jsonl", "resource_id"),
+    "resource_demands": ("resource_demands.jsonl", "demand_id"),
+    "package_interfaces": ("package_interfaces.jsonl", "package_interface_id"),
+    "coordination_issues": ("coordination_issues.jsonl", "coordination_issue_id"),
+    "coordination_runs": ("coordination_runs.jsonl", "coordination_run_id"),
     "proposal_reviews": ("proposal_reviews.jsonl", "proposal_review_id"),
 }
 
@@ -206,6 +214,9 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
         root / ".home-control" / "baseline_snapshots.jsonl", "baseline_snapshot_id"
     )[1]
     inventories = read_jsonl(root / ".home-control" / "document_inventories.jsonl", "inventory_id")[1]
+    compliance_assessments = read_jsonl(
+        root / ".home-control" / "compliance_assessments.jsonl", "compliance_assessment_id"
+    )[1]
     superseded_baseline_ids = {
         str(snapshot.get("supersedes_baseline_snapshot_id", "")).strip()
         for snapshot in baseline_snapshots.values()
@@ -305,7 +316,13 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             if abs(quantity * unit_price - amount) > max(0.01, abs(amount) * 0.000001):
                 raise ValueError(f"QuoteItem {record['quote_item_id']} has inconsistent arithmetic")
 
-    registered_ids = set(active_documents) | set(requirements) | set(inventories) | set(baseline_snapshots)
+    registered_ids = (
+        set(active_documents)
+        | set(requirements)
+        | set(inventories)
+        | set(baseline_snapshots)
+        | set(compliance_assessments)
+    )
     for mapping in known.values():
         registered_ids.update(mapping)
 
@@ -351,6 +368,82 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             )
             for run_id in reading_run_ids
         )
+        extraction_run_ids = string_list(
+            review.get("fact_extraction_run_ids", []),
+            f"ProposalReview {review_id}.fact_extraction_run_ids",
+            allow_empty=False,
+        )
+        matching_complete_extraction = False
+        for extraction_id in extraction_run_ids:
+            extraction = known["fact_extraction_runs"].get(extraction_id)
+            if extraction is None:
+                raise ValueError(f"ProposalReview {review_id} refers to an unknown FactExtractionRun")
+            expected_sections = string_list(
+                extraction.get("expected_sections", []),
+                f"FactExtractionRun {extraction_id}.expected_sections",
+                allow_empty=False,
+            )
+            checked_sections = string_list(
+                extraction.get("checked_sections", []),
+                f"FactExtractionRun {extraction_id}.checked_sections",
+                allow_empty=False,
+            )
+            fact_ids = string_list(
+                extraction.get("fact_ids", []),
+                f"FactExtractionRun {extraction_id}.fact_ids",
+                allow_empty=False,
+            )
+            if any(identifier not in known["facts"] for identifier in fact_ids):
+                raise ValueError(f"FactExtractionRun {extraction_id} refers to an unknown Fact")
+            if (
+                extraction.get("source_document_id") == document_id
+                and extraction.get("document_version") == review.get("document_version")
+                and extraction.get("sha256") == review.get("sha256")
+                and extraction.get("status") == "complete"
+                and set(expected_sections) == set(checked_sections)
+                and extraction.get("coverage_gaps") == []
+            ):
+                matching_complete_extraction = True
+        project_package_ids = string_list(
+            review.get("project_package_ids", []),
+            f"ProposalReview {review_id}.project_package_ids",
+            allow_empty=False,
+        )
+        if any(identifier not in known["project_packages"] for identifier in project_package_ids):
+            raise ValueError(f"ProposalReview {review_id} refers to an unknown ProjectPackage")
+        for field, key in (
+            ("information_gap_ids", "information_gaps"),
+            ("coordination_issue_ids", "coordination_issues"),
+        ):
+            linked = string_list(review.get(field, []), f"ProposalReview {review_id}.{field}")
+            if any(identifier not in known[key] for identifier in linked):
+                raise ValueError(f"ProposalReview {review_id}.{field} contains an unknown link")
+        compliance_ids = string_list(
+            review.get("compliance_assessment_ids", []),
+            f"ProposalReview {review_id}.compliance_assessment_ids",
+        )
+        if any(identifier not in compliance_assessments for identifier in compliance_ids):
+            raise ValueError(f"ProposalReview {review_id} refers to an unknown ComplianceAssessment")
+        normative_check = next(
+            (
+                value
+                for value in review.get("mandatory_checks", [])
+                if isinstance(value, dict) and value.get("check_id") == "norms_and_specialist_boundary"
+            ),
+            None,
+        )
+        if isinstance(normative_check, dict) and normative_check.get("status") == "completed":
+            if not compliance_ids:
+                raise ValueError(f"ProposalReview {review_id} completed normative check needs a ComplianceAssessment")
+            if any(compliance_assessments[value].get("status") != "complete" for value in compliance_ids):
+                raise ValueError(f"ProposalReview {review_id} links a non-complete ComplianceAssessment")
+            normative_sources = string_list(
+                normative_check.get("source_ids", []),
+                f"ProposalReview {review_id} normative source_ids",
+                allow_empty=False,
+            )
+            if not set(normative_sources) & set(compliance_ids):
+                raise ValueError(f"ProposalReview {review_id} normative check does not cite its ComplianceAssessment")
         baseline_mode = review.get("baseline_assessment_mode")
         if baseline_mode not in DIMENSIONS["baseline_assessment_mode"]:
             raise ValueError(f"ProposalReview {review_id} has an unknown or missing baseline_assessment_mode")
@@ -596,11 +689,15 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             if (
                 inventory.get("status") != "complete"
                 or not matching_complete_run
+                or not matching_complete_extraction
                 or blockers
                 or (baseline_mode == "accepted_baseline" and not baseline_ids)
                 or not quote_item_ids
             ):
-                raise ValueError(f"ProposalReview {review_id} cannot be ready while coverage or blockers are incomplete")
+                raise ValueError(
+                    f"ProposalReview {review_id} cannot be ready while coverage or blockers are incomplete, "
+                    "including semantic fact extraction"
+                )
             if not searches or not any(search.get("status") in {"complete", "partial"} for search in searches):
                 raise ValueError(f"ProposalReview {review_id} cannot be ready without a performed external search")
             contractor_id = str(quote.get("contractor_id", "")).strip()

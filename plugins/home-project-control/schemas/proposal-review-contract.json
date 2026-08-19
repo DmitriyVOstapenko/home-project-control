@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.2",
-  "legacy_contract_versions": ["1.0", "1.1"],
+  "contract_version": "1.4",
+  "legacy_contract_versions": ["1.0", "1.1", "1.2", "1.3"],
   "check_statuses": ["completed", "not_applicable", "blocked", "requires_specialist"],
   "ready_statuses": ["completed", "not_applicable"],
   "foreman_verdicts": [
@@ -43,7 +43,6 @@
     "missing_inputs_and_questions",
     "execution_and_acceptance",
     "lifecycle_consequences",
-    "norms_and_specialist_boundary",
     "market_and_contractor_search",
     "recommendation_and_limits"
   ],
