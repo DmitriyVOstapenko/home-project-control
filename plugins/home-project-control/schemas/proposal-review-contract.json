@@ -1,6 +1,6 @@
 {
-  "contract_version": "1.4",
-  "legacy_contract_versions": ["1.0", "1.1", "1.2", "1.3"],
+  "contract_version": "1.5",
+  "legacy_contract_versions": ["1.0", "1.1", "1.2", "1.3", "1.4"],
   "check_statuses": ["completed", "not_applicable", "blocked", "requires_specialist"],
   "ready_statuses": ["completed", "not_applicable"],
   "foreman_verdicts": [
@@ -15,6 +15,18 @@
   "candidate_comparability_statuses": ["potentially_comparable", "requires_quote", "not_comparable"],
   "risk_urgencies": ["immediate", "before_contract", "before_work", "before_acceptance", "monitor"],
   "risk_impact_lanes": ["cost", "schedule", "quality", "safety", "operation", "legal_or_contract"],
+  "proposal_context_modes": ["as_is_and_baseline", "as_is_only", "baseline_only", "documents_only"],
+  "baseline_scope_statuses": ["applicable", "not_applicable", "undetermined"],
+  "as_is_match_statuses": ["applied", "partial", "conflict", "unknown", "not_applicable"],
+  "context_conflict_statuses": ["open", "resolved", "accepted_risk", "not_applicable"],
+  "decision_criterion_kinds": ["mandatory", "preference"],
+  "alternative_comparison_statuses": ["satisfies", "partial", "conflicts", "unknown", "not_applicable"],
+  "price_comparison_statuses": ["comparable", "partially_comparable", "not_comparable", "unknown"],
+  "clarification_recipients": ["contractor", "supplier", "designer", "owner", "specialist", "other"],
+  "clarification_priorities": ["critical", "high", "normal", "low"],
+  "clarification_statuses": ["open", "answered", "verified", "closed_not_resolved", "superseded"],
+  "management_scenario_statuses": ["complete", "partial", "blocked", "not_applicable"],
+  "challenge_review_statuses": ["recommendation_held", "recommendation_changed", "insufficient_evidence"],
   "universal_checks": [
     {"check_id": "source_coverage", "title": "Полное чтение точной версии и покрытие источника"},
     {"check_id": "discipline_identification", "title": "Определение всех затронутых профессиональных направлений"},
@@ -59,6 +71,18 @@
     {"track_id": "same_class_alternative", "title": "Альтернативное решение того же технического класса"},
     {"track_id": "different_technical_principle", "title": "Иной технический принцип достижения результата"},
     {"track_id": "continue_repair_defer_or_avoid", "title": "Продолжение эксплуатации, ремонт, отсрочка или отказ от вмешательства"}
+  ],
+  "alternative_comparison_axes": [
+    {"axis_id": "project_requirements", "title": "Соответствие применимым требованиям принятой базы"},
+    {"axis_id": "as_is_fit", "title": "Совместимость с фактическим состоянием объекта"},
+    {"axis_id": "performance", "title": "Функция, производительность и расчётные режимы"},
+    {"axis_id": "interfaces", "title": "Смежные системы, ресурсы, трассы и физические интерфейсы"},
+    {"axis_id": "constructability", "title": "Монтаж, доступ, последовательность и восстановление"},
+    {"axis_id": "regulatory", "title": "Нормативная применимость и границы профильной проверки"},
+    {"axis_id": "cost", "title": "Полная стоимость реализации и неизвестная экспозиция"},
+    {"axis_id": "schedule", "title": "Срок, зависимости, поставка и простой"},
+    {"axis_id": "operation_and_lifecycle", "title": "Эксплуатация, обслуживание и жизненный цикл"},
+    {"axis_id": "owner_criteria", "title": "Критерии решения владельца"}
   ],
   "scope_responsibility_roles": [
     "design_and_calculations",

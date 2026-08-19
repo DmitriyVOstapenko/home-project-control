@@ -97,6 +97,20 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     baseline_limitations = (
         review.get("baseline_limitations", []) if isinstance(review.get("baseline_limitations"), list) else []
     )
+    context_mode = str(review.get("context_mode", "legacy_unspecified")).strip()
+    as_is_snapshot_id = str(review.get("as_is_snapshot_id", "")).strip()
+    as_is_scope = str(review.get("as_is_applicability_scope", "")).strip()
+    context_limitations = (
+        review.get("context_limitations", []) if isinstance(review.get("context_limitations"), list) else []
+    )
+    as_is_matches = review.get("as_is_fact_matches", []) if isinstance(review.get("as_is_fact_matches"), list) else []
+    context_conflicts = review.get("context_conflicts", []) if isinstance(review.get("context_conflicts"), list) else []
+    clarifications = (
+        review.get("clarification_requests", []) if isinstance(review.get("clarification_requests"), list) else []
+    )
+    management_scenarios = (
+        review.get("management_scenarios", []) if isinstance(review.get("management_scenarios"), list) else []
+    )
     reference_comparisons = (
         review.get("reference_comparisons", []) if isinstance(review.get("reference_comparisons"), list) else []
     )
@@ -187,7 +201,31 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         if not incomplete_contract
         else f"не закрыто пунктов: {len(incomplete_contract)}"
     )
-    unresolved = [*blockers, *baseline_limitations, *unknown_costs, *open_site_checks]
+    open_clarifications = [
+        f"{value.get('clarification_id', '')}: {value.get('question', '')}"
+        for value in clarifications
+        if isinstance(value, dict) and value.get("status") in {"open", "answered", "closed_not_resolved"}
+    ]
+    open_context_conflicts = [
+        f"{value.get('conflict_id', '')}: {value.get('statement', '')}"
+        for value in context_conflicts
+        if isinstance(value, dict) and value.get("status") == "open"
+    ]
+    blocked_management = [
+        f"{value.get('scenario_id', '')}: {', '.join(value.get('blocking_inputs', []))}"
+        for value in management_scenarios
+        if isinstance(value, dict) and value.get("status") == "blocked"
+    ]
+    unresolved = [
+        *blockers,
+        *baseline_limitations,
+        *context_limitations,
+        *unknown_costs,
+        *open_site_checks,
+        *open_clarifications,
+        *open_context_conflicts,
+        *blocked_management,
+    ]
     executive_summary = f"""## Решение владельца — кратко
 
 - **Вердикт и готовность:** `{foreman.get('verdict', 'не сформирован')}`; `{foreman.get('decision_readiness', 'не определена')}`.
@@ -196,6 +234,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - **Цена:** КП {amount_label(cost.get('quoted_total'), currency)}; расчётный диапазон {amount_label(cost.get('estimated_total_low'), currency)} — {amount_label(cost.get('estimated_total_high'), currency)}.
 - **Предпочтительный вариант:** {preferred_label}. Основание: {foreman.get('preferred_alternative_rationale', 'не сформировано')}.
 - **Нормативная проверка:** {regulatory_summary}.
+- **Контекст объекта:** `{context_mode}`; факт `{as_is_snapshot_id or 'не принят'}`; проект `{baseline_snapshot_id or 'не принят'}`.
 - **Покрытие доказательств:** {evidence_coverage}; базовый режим `{baseline_mode}`; открытых зависимых ограничений: {len(unresolved)}.
 
 ### Три главных риска
@@ -216,6 +255,14 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 Полное обоснование: [full-dossier.md](full-dossier.md). Карточка не заменяет решение владельца и обязательную проверку профильным специалистом там, где она требуется.
 """
+    clarification_request_lines = [
+        f"`{value.get('clarification_id', '')}` [{value.get('priority', '')}; {value.get('status', '')}] "
+        f"{value.get('question', '')} Требуемое подтверждение: {value.get('requested_evidence', '')}. "
+        f"Формат: {value.get('answer_format', '')}. Блокирует: "
+        f"{', '.join(value.get('blocked_conclusions', [])) or 'не указано'}."
+        for value in clarifications
+        if isinstance(value, dict) and value.get("recipient") in {"contractor", "supplier"}
+    ]
 
     request = f"""# Запрос подрядчику по КП {review.get('quote_id', '')}
 
@@ -223,7 +270,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 ## Вопросы и недостающие данные
 
-{bullets(questions)}
+{bullets(clarification_request_lines or questions)}
 
 ## Уточнения по границам объёма
 
@@ -285,6 +332,70 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         f"влияние: {value.get('implementation_impacts', '')}; жизненный цикл: {value.get('lifecycle_cost_notes', '')}"
         for value in review.get("technical_alternative_assessments", [])
     ]
+    baseline_scope_lines = [
+        f"`{value.get('requirement_id', '')}` [{value.get('status', '')}]: {value.get('rationale', '')}; "
+        f"источники: {', '.join(value.get('source_ids', [])) or 'нет'}"
+        for value in review.get("baseline_scope_classifications", [])
+        if isinstance(value, dict)
+    ]
+    as_is_match_lines = [
+        f"`{value.get('fact_id', '')}` [{value.get('status', '')}]: {value.get('notes', '')}; "
+        f"строки КП: {', '.join(value.get('quote_item_ids', [])) or 'нет'}; "
+        f"варианты: {', '.join(value.get('alternative_ids', [])) or 'нет'}"
+        for value in as_is_matches
+        if isinstance(value, dict)
+    ]
+    context_conflict_lines = [
+        f"`{value.get('conflict_id', '')}` [{value.get('status', '')}; "
+        f"blocks_contract={value.get('blocks_contract', '')}]: {value.get('statement', '')}; "
+        f"влияние: {value.get('impact', '')}; решение: {value.get('resolution', '')}"
+        for value in context_conflicts
+        if isinstance(value, dict)
+    ]
+    decision_criteria_lines = [
+        f"`{value.get('criterion_id', '')}` [{value.get('kind', '')}]: {value.get('title', '')}; "
+        f"основание: {value.get('rationale', '')}; вес: {value.get('weight', 'не задан')}"
+        for value in review.get("decision_criteria", [])
+        if isinstance(value, dict)
+    ]
+    alternative_comparison_lines = [
+        f"`{value.get('comparison_id', '')}` / `{value.get('alternative_id', '')}`: "
+        + " | ".join(
+            f"{axis.get('axis_id', '')} [{axis.get('status', '')}] {axis.get('result', '')}"
+            for axis in value.get("axis_results", [])
+            if isinstance(axis, dict)
+        )
+        for value in review.get("alternative_comparisons", [])
+        if isinstance(value, dict)
+    ]
+    price_comparison_lines = [
+        f"`{value.get('comparison_id', '')}` / `{value.get('subject_id', '')}` [{value.get('status', '')}]: "
+        f"объём — {value.get('scope_basis', '')}; количество — {value.get('quantity_basis', '')}; "
+        f"налоги — {value.get('tax_context', '')}; доставка — {value.get('delivery_context', '')}; "
+        f"монтаж — {value.get('installation_context', '')}; {value.get('observed_at', '')}, "
+        f"{value.get('region', '')}; наблюдения цен: {', '.join(value.get('price_observation_ids', [])) or 'нет'}; "
+        f"ограничения: {', '.join(value.get('limitations', [])) or 'нет'}"
+        for value in review.get("price_comparisons", [])
+        if isinstance(value, dict)
+    ]
+    clarification_lines = [
+        f"`{value.get('clarification_id', '')}` -> `{value.get('information_gap_id', '')}` "
+        f"[{value.get('recipient', '')}; {value.get('priority', '')}; {value.get('status', '')}]: "
+        f"{value.get('question', '')}; подтверждение: {value.get('requested_evidence', '')}; "
+        f"решение: {value.get('resolution', '') or 'не получено'}"
+        for value in clarifications
+        if isinstance(value, dict)
+    ]
+    management_scenario_lines = [
+        f"`{value.get('scenario_id', '')}` / `{value.get('alternative_id', '')}` [{value.get('status', '')}]: "
+        f"стоимость — {value.get('cost_summary', '')}; срок — {value.get('schedule_summary', '')}; "
+        f"не хватает: {', '.join(value.get('blocking_inputs', [])) or 'ничего'}; "
+        f"CostPlan `{value.get('cost_plan_id', '') or 'не создан'}`, "
+        f"SchedulePlan `{value.get('schedule_plan_id', '') or 'не создан'}`"
+        for value in management_scenarios
+        if isinstance(value, dict)
+    ]
+    challenge = review.get("challenge_review", {}) if isinstance(review.get("challenge_review"), dict) else {}
     additional_lines = [
         f"`{value.get('check_id', '')}` [{value.get('status', '')}] {value.get('question', '')}: "
         f"{value.get('result', '')}"
@@ -389,16 +500,36 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - Нормативные оценки: {', '.join(review.get('compliance_assessment_ids', [])) or 'не зарегистрированы'}
 - Направления: {', '.join(str(value) for value in disciplines)}
 - Базовый режим: `{baseline_mode}`
+- Контекст анализа: `{context_mode}`
+- Снимок фактического состояния: `{as_is_snapshot_id or 'не принят'}`
+- Область фактического состояния: {as_is_scope or 'не применяется'}
 - Снимок базовой линии: `{baseline_snapshot_id or 'не принят'}`
 - Применённая область базы: {baseline_applicability_scope or 'не применяется'}
+- Целевые сущности объекта: {', '.join(review.get('target_entity_ids', [])) or 'не выделены'}
 
-### Зависимые ограничения
+### Ограничения контекста
+
+{bullets(context_limitations)}
+
+### Зависимые ограничения базовой линии
 
 {bullets(baseline_limitations)}
 
 ### Справочные сопоставления
 
 {bullets(reference_lines)}
+
+### Полнота выбора требований базовой линии
+
+{bullets(baseline_scope_lines)}
+
+### Фактическое состояние и строки КП
+
+{bullets(as_is_match_lines)}
+
+### Конфликты факта, проекта и предложения
+
+{bullets(context_conflict_lines)}
 
 ## Прорабский вывод
 
@@ -477,6 +608,37 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(technical_alternative_lines)}
 
+## Критерии решения владельца
+
+{bullets(decision_criteria_lines)}
+
+## Единая матрица альтернатив
+
+{bullets(alternative_comparison_lines)}
+
+## Сопоставимость проверенных цен
+
+{bullets(price_comparison_lines)}
+
+## Стоимость и календарь вариантов
+
+{bullets(management_scenario_lines)}
+
+## Оппонирующий проход
+
+- Статус: `{challenge.get('status', 'не выполнен')}`
+- Проверяемая рекомендация: {challenge.get('recommendation_under_test', 'не указана')}
+- Сильнейший контраргумент: {challenge.get('strongest_counterargument', 'не указан')}
+- Итог: {challenge.get('conclusion', 'не сформирован')}
+
+Возможные отказы:
+
+{bullets(challenge.get('failure_modes', []))}
+
+Данные, способные изменить решение:
+
+{bullets(challenge.get('decision_changing_inputs', []))}
+
 ## Дополнительный анализ модели
 
 {bullets(additional_lines)}
@@ -503,7 +665,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(blockers)}
 
-{bullets(questions)}
+{bullets(clarification_lines or questions)}
 
 ## Условия и следующие действия
 
