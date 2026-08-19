@@ -97,7 +97,7 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_skill_folder_matches_frontmatter_name(self) -> None:
         skill_dirs = sorted(path for path in SKILLS_ROOT.iterdir() if path.is_dir())
-        self.assertEqual(len(skill_dirs), 14)
+        self.assertEqual(len(skill_dirs), 15)
 
         for skill_dir in skill_dirs:
             skill_file = skill_dir / "SKILL.md"

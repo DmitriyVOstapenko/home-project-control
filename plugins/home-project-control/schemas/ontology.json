@@ -1,6 +1,6 @@
 {
   "ontology_id": "home-project-control",
-  "schema_version": "6.0",
+  "schema_version": "7.0",
   "dimensions": {
     "statement_kind": [
       "source_fact",
@@ -353,7 +353,15 @@
       "not_applicable",
       "requires_specialist"
     ],
-    "regulatory_sync_status": ["complete", "partial", "blocked"]
+    "regulatory_sync_status": ["complete", "partial", "blocked"],
+    "cost_plan_status": ["draft", "ready_for_baseline", "superseded"],
+    "cost_basis_type": ["quote", "contract", "market_observation", "estimate_norm", "calculation", "allowance", "actual", "unknown"],
+    "schedule_plan_status": ["draft", "ready_for_baseline", "superseded"],
+    "schedule_relationship_type": ["FS", "SS", "FF", "SF"],
+    "schedule_date_basis": ["contractual", "calculated", "scenario", "actual", "unknown"],
+    "management_baseline_status": ["accepted", "withdrawn"],
+    "change_impact_status": ["draft", "under_review", "approved", "rejected", "superseded"],
+    "control_snapshot_status": ["complete", "partial", "blocked"]
   },
   "field_dimensions": {
     "Fact.statement_kind": "statement_kind",
@@ -421,7 +429,15 @@
     "ComplianceAssessment.status": "regulatory_assessment_status",
     "ComplianceResult.applicability_status": "regulatory_applicability_status",
     "ComplianceResult.compliance_status": "regulatory_compliance_status",
-    "RegulatorySyncRun.status": "regulatory_sync_status"
+    "RegulatorySyncRun.status": "regulatory_sync_status",
+    "CostPlan.status": "cost_plan_status",
+    "CostPlan.items[].cost_basis": "cost_basis_type",
+    "SchedulePlan.status": "schedule_plan_status",
+    "SchedulePlan.activities[].date_basis": "schedule_date_basis",
+    "SchedulePlan.activities[].predecessors[].relationship": "schedule_relationship_type",
+    "ManagementBaseline.status": "management_baseline_status",
+    "ChangeImpactAssessment.status": "change_impact_status",
+    "ControlSnapshot.status": "control_snapshot_status"
   },
   "entities": {
     "Project": {"id_field": "project_id", "id_format": "uuid4", "registry": ".home-control/project.json"},
@@ -470,7 +486,12 @@
     "RegulatorySyncRun": {"id_field": "regulatory_sync_run_id", "id_prefix": "RSR-", "registry": ".home-control/regulatory_sync_runs.jsonl"},
     "DocumentIntakeBatch": {"id_field": "intake_batch_id", "id_prefix": "INT-", "registry": ".home-control/document_intake_batches.jsonl"},
     "AsIsSnapshot": {"id_field": "as_is_snapshot_id", "id_prefix": "AIS-", "registry": ".home-control/as_is_snapshots.jsonl"},
-    "AnalysisRequest": {"id_field": "analysis_request_id", "id_prefix": "ANR-", "registry": ".home-control/analysis_requests.jsonl"}
+    "AnalysisRequest": {"id_field": "analysis_request_id", "id_prefix": "ANR-", "registry": ".home-control/analysis_requests.jsonl"},
+    "CostPlan": {"id_field": "cost_plan_id", "id_prefix": "CPL-", "registry": ".home-control/cost_plans.jsonl"},
+    "SchedulePlan": {"id_field": "schedule_plan_id", "id_prefix": "SPL-", "registry": ".home-control/schedule_plans.jsonl"},
+    "ManagementBaseline": {"id_field": "management_baseline_id", "id_prefix": "MBL-", "registry": ".home-control/management_baselines.jsonl"},
+    "ChangeImpactAssessment": {"id_field": "change_impact_assessment_id", "id_prefix": "CIA-", "registry": ".home-control/change_impact_assessments.jsonl"},
+    "ControlSnapshot": {"id_field": "control_snapshot_id", "id_prefix": "CSN-", "registry": ".home-control/control_snapshots.jsonl"}
   },
   "required_relations": [
     "ReadingRun.source_document_id -> SourceDocument.document_id",
@@ -594,7 +615,18 @@
     "ComplianceAssessment.result_ids -> ComplianceResult.compliance_result_id, target_entity_ids -> registered project entities and information_gap_ids -> InformationGap.gap_id when applicable",
     "ComplianceResult.assessment_id -> ComplianceAssessment.compliance_assessment_id and requirement_id -> RegulatoryRequirement.regulatory_requirement_id",
     "ComplianceResult.evidence_fact_ids -> Fact.fact_id, finding_ids -> Finding.finding_id, information_gap_ids -> InformationGap.gap_id and target_entity_ids -> registered project entities when applicable",
-    "RegulatorySyncRun.norm_reference_ids and detected_change_norm_reference_ids -> NormReference.norm_reference_id"
+    "RegulatorySyncRun.norm_reference_ids and detected_change_norm_reference_ids -> NormReference.norm_reference_id",
+    "CostPlan.baseline_snapshot_id -> BaselineSnapshot.baseline_snapshot_id and CostPlan.items.work_item_id -> work_items.csv work_item_id when linked",
+    "CostPlan.supersedes_cost_plan_id -> the immediately preceding CostPlan revision in the same plan_series_id when revision is greater than 1",
+    "CostPlan.items.package_id -> ProjectPackage.package_id, quote_item_ids -> QuoteItem.quote_item_id, price_observation_ids -> PriceObservation.price_observation_id and source_ids -> registered evidence",
+    "SchedulePlan.baseline_snapshot_id -> BaselineSnapshot.baseline_snapshot_id and SchedulePlan.activities.work_item_id -> work_items.csv work_item_id when linked",
+    "SchedulePlan.supersedes_schedule_plan_id -> the immediately preceding SchedulePlan revision in the same plan_series_id when revision is greater than 1",
+    "SchedulePlan.activities.package_id -> ProjectPackage.package_id and source_ids -> registered evidence; every predecessor activity_id belongs to the same SchedulePlan",
+    "ManagementBaseline.cost_plan_id -> CostPlan.cost_plan_id, schedule_plan_id -> SchedulePlan.schedule_plan_id and owner_decision_id -> OwnerDecision.decision_id",
+    "ManagementBaseline.supersedes_management_baseline_id -> ManagementBaseline.management_baseline_id when baseline_version is greater than 1",
+    "ChangeImpactAssessment.management_baseline_id -> ManagementBaseline.management_baseline_id, change_id -> changes.csv change_id and decision_id -> OwnerDecision.decision_id when status is approved",
+    "ChangeImpactAssessment.affected_cost_item_ids -> CostPlan.items.item_id and affected_activity_ids -> SchedulePlan.activities.activity_id within the linked baseline",
+    "ControlSnapshot.management_baseline_id -> ManagementBaseline.management_baseline_id, change_impact_assessment_ids -> ChangeImpactAssessment.change_impact_assessment_id and source_ids -> registered evidence"
   ],
   "invariants": [
     "A source file is never changed by a registry operation.",
@@ -654,6 +686,13 @@
     "LifecycleDecision with status recommendation_ready or awaiting_owner_decision records its conclusion as statement_kind recommendation.",
     "LifecycleDecision status owner_decided requires an explicit linked OwnerDecision, and status implemented additionally requires implementation evidence.",
     "EquipmentOption status selected and WorkRequest status approved require an explicit linked OwnerDecision.",
-    "A Supplier or Contractor found in external sources remains a candidate until its identity, scope, conditions and comparability have been checked."
+    "A Supplier or Contractor found in external sources remains a candidate until its identity, scope, conditions and comparability have been checked.",
+    "A CostPlan is an immutable revision whose total is reproducible from atomic items; unknown amounts remain explicit and prevent ready_for_baseline status rather than becoming zero.",
+    "A SchedulePlan is an immutable revision whose activities, dependencies, calendars, constraints and date bases are explicit; calculated dates and criticality are not claimed while required durations or dependencies are unknown.",
+    "A ManagementBaseline is created only by an explicit OwnerDecision and binds one exact ready CostPlan revision to one exact ready SchedulePlan revision under the same accepted project BaselineSnapshot and the same complete work_item_id set.",
+    "An approved change does not silently rewrite an accepted ManagementBaseline; its cost and schedule impact is recorded separately and a changed baseline requires a new owner-accepted version.",
+    "A ControlSnapshot is immutable and dated; physical progress, contractual completion, acceptance, payment and operational readiness remain separate states.",
+    "Cost and schedule forecasts show their formulas, exact baseline, approved changes, actual data, remaining estimate and unknown exposure; missing values are not treated as zero.",
+    "Plan-fact and earned-value indicators are calculated only from an explicit weighting basis and evidence-backed actuals; an indicator never substitutes for inspection, acceptance or payment evidence."
   ]
 }

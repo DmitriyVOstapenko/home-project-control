@@ -29,6 +29,7 @@ REGULATORY_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skill
 RECORD_REGULATORY = REGULATORY_SCRIPT_ROOT / "record_regulatory_assessment.py"
 CHECK_REGULATORY_UPDATES = REGULATORY_SCRIPT_ROOT / "check_regulatory_updates.py"
 DASHBOARD = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "track-progress-and-cost" / "scripts" / "build_dashboard.py"
+MANAGEMENT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "track-progress-and-cost" / "scripts" / "record_management_cycle.py"
 STRUCTURE = json.loads(
     (REPO_ROOT / "plugins" / "home-project-control" / "schemas" / "project-structure.json").read_text(
         encoding="utf-8"
@@ -159,6 +160,125 @@ def write_jsonl(path: Path, *records: dict) -> None:
 
 def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def append_csv_row(path: Path, row: dict[str, object]) -> None:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        headers = list(csv.DictReader(handle).fieldnames or [])
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers, extrasaction="ignore")
+        writer.writerow(row)
+
+
+def management_package() -> dict:
+    return {
+        "schema_version": "1.0",
+        "cost_plans": [{
+            "cost_plan_id": "CPL-1",
+            "plan_series_id": "COST-MAIN",
+            "revision": 1,
+            "status": "ready_for_baseline",
+            "baseline_snapshot_id": "BL-MGT",
+            "valuation_date": "2026-01-01",
+            "currency": "RUB",
+            "items": [
+                {
+                    "item_id": "CPI-1",
+                    "work_item_id": "W-1",
+                    "description": "Подготовительные работы",
+                    "quantity": 1,
+                    "unit": "компл.",
+                    "unit_rate": 100,
+                    "amount": 100,
+                    "cost_basis": "calculation",
+                    "source_ids": ["F-MGT"],
+                    "quote_item_ids": [],
+                    "price_observation_ids": [],
+                },
+                {
+                    "item_id": "CPI-2",
+                    "work_item_id": "W-2",
+                    "description": "Основные работы",
+                    "quantity": 2,
+                    "unit": "компл.",
+                    "unit_rate": 100,
+                    "amount": 200,
+                    "cost_basis": "calculation",
+                    "source_ids": ["F-MGT"],
+                    "quote_item_ids": [],
+                    "price_observation_ids": [],
+                },
+            ],
+        }],
+        "schedule_plans": [{
+            "schedule_plan_id": "SPL-1",
+            "plan_series_id": "SCHEDULE-MAIN",
+            "revision": 1,
+            "status": "ready_for_baseline",
+            "baseline_snapshot_id": "BL-MGT",
+            "project_start": "2026-01-05",
+            "calendar": {"working_weekdays": [0, 1, 2, 3, 4], "holidays": []},
+            "activities": [
+                {
+                    "activity_id": "ACT-1",
+                    "work_item_id": "W-1",
+                    "title": "Подготовка",
+                    "duration_workdays": 5,
+                    "date_basis": "calculated",
+                    "predecessors": [],
+                    "source_ids": ["F-MGT"],
+                },
+                {
+                    "activity_id": "ACT-2",
+                    "work_item_id": "W-2",
+                    "title": "Основные работы",
+                    "duration_workdays": 3,
+                    "date_basis": "calculated",
+                    "predecessors": [{"activity_id": "ACT-1", "relationship": "FS", "lag_workdays": 0}],
+                    "source_ids": ["F-MGT"],
+                },
+            ],
+        }],
+        "management_baselines": [{
+            "management_baseline_id": "MBL-1",
+            "baseline_version": 1,
+            "status": "accepted",
+            "cost_plan_id": "CPL-1",
+            "schedule_plan_id": "SPL-1",
+            "owner_decision_id": "D-MGT",
+            "accepted_at": "2026-01-02T12:00:00+03:00",
+            "supersedes_management_baseline_id": "",
+        }],
+        "change_impact_assessments": [{
+            "change_impact_assessment_id": "CIA-1",
+            "management_baseline_id": "MBL-1",
+            "change_id": "CH-1",
+            "status": "approved",
+            "cost_delta": 50,
+            "schedule_delta_workdays": 1,
+            "currency": "RUB",
+            "affected_cost_item_ids": ["CPI-2"],
+            "affected_activity_ids": ["ACT-2"],
+            "decision_id": "D-MGT",
+            "effective_date": "2026-01-02",
+            "source_ids": ["F-MGT"],
+        }],
+        "control_snapshots": [{
+            "control_snapshot_id": "CSN-1",
+            "management_baseline_id": "MBL-1",
+            "data_date": "2026-01-07",
+            "status": "complete",
+            "currency": "RUB",
+            "estimate_to_complete": 250,
+            "forecast_finish": "2026-01-16",
+            "change_impact_assessment_ids": ["CIA-1"],
+            "progress_measurements": [
+                {"activity_id": "ACT-1", "weight": 0.4, "physical_progress_percent": 50, "source_ids": ["F-MGT"]},
+                {"activity_id": "ACT-2", "weight": 0.6, "physical_progress_percent": 0, "source_ids": ["F-MGT"]},
+            ],
+            "source_ids": ["F-MGT"],
+        }],
+    }
 
 
 def complete_proposal_contract(
@@ -894,8 +1014,8 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertTrue(changed_result["changed"])
             self.assertEqual(changed_result["source_checks"][0]["change_status"], "changed")
 
-    def test_real_v1_through_v7_projects_migrate_without_losing_existing_data(self) -> None:
-        for version in ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0"):
+    def test_real_v1_through_v8_projects_migrate_without_losing_existing_data(self) -> None:
+        for version in ("1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0"):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 create_legacy_project(project, version)
@@ -919,6 +1039,7 @@ class ProjectToolsTest(unittest.TestCase):
                     "5.0": "project_packages.jsonl",
                     "6.0": "regulatory_requirements.jsonl",
                     "7.0": "document_intake_batches.jsonl",
+                    "8.0": "cost_plans.jsonl",
                 }[version]
                 self.assertIn(expected_added_registry, preview.stdout)
                 self.assertIn("update_project_marker_version", preview.stdout)
@@ -974,7 +1095,7 @@ class ProjectToolsTest(unittest.TestCase):
         self.assertIn("inside the plugin distribution", refused.stderr)
 
     def test_unknown_older_and_newer_versions_are_blocked(self) -> None:
-        for version, expected in (("1.5", "No supported migration"), ("9.0", "Refusing to downgrade")):
+        for version, expected in (("1.5", "No supported migration"), ("10.0", "Refusing to downgrade")):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 project = Path(temporary) / "project"
                 self.assertEqual(run_script(INIT, project).returncode, 0)
@@ -2804,6 +2925,177 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(baseline_v2_applied.returncode, 0, baseline_v2_applied.stderr)
             self.assertEqual(run_script(AUDIT, project).returncode, 0)
             self.assertIn("`BL-1`", (target / "full-dossier.md").read_text(encoding="utf-8"))
+
+
+    def prepare_management_project(self, project: Path) -> None:
+        self.assertEqual(run_script(INIT, project).returncode, 0)
+        control = project / ".home-control"
+        write_jsonl(
+            control / "facts.jsonl",
+            {
+                "fact_id": "F-MGT",
+                "statement": "Подтверждённое основание управленческого плана",
+                "statement_kind": "source_fact",
+                "evidence_origin": "owner_confirmation",
+                "verification_status": "verified",
+            },
+        )
+        write_jsonl(
+            control / "decisions.jsonl",
+            {
+                "decision_id": "D-MGT",
+                "decision_type": "management_baseline_acceptance",
+                "status": "approved",
+                "decision": "Принять стоимость, срок и изменение",
+            },
+        )
+        write_jsonl(
+            control / "baseline_snapshots.jsonl",
+            {"baseline_snapshot_id": "BL-MGT", "baseline_version": 1},
+        )
+        append_csv_row(
+            control / "work_items.csv",
+            {"work_item_id": "W-1", "title": "Подготовка", "status": "not_started"},
+        )
+        append_csv_row(
+            control / "work_items.csv",
+            {"work_item_id": "W-2", "title": "Основные работы", "status": "not_started"},
+        )
+        append_csv_row(
+            control / "changes.csv",
+            {
+                "change_id": "CH-1",
+                "date": "2026-01-02",
+                "work_item_id": "W-2",
+                "description": "Утверждённое изменение",
+                "status": "approved",
+                "decision_id": "D-MGT",
+            },
+        )
+
+    def test_linked_management_cycle_calculates_and_records_plan_fact_forecast(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.prepare_management_project(project)
+            control = project / ".home-control"
+            documents = json.loads((control / "documents.json").read_text(encoding="utf-8"))
+            documents["items"].append({"document_id": "DOC-PAY", "status": "active", "versions": []})
+            (control / "documents.json").write_text(
+                json.dumps(documents, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            append_csv_row(
+                control / "costs.csv",
+                {
+                    "cost_id": "C-IN-SCOPE",
+                    "date": "2026-01-06",
+                    "work_item_id": "W-1",
+                    "amount": 40,
+                    "currency": "RUB",
+                    "status": "confirmed_paid",
+                    "evidence_document_id": "DOC-PAY",
+                    "evidence_locator": "строка 1",
+                },
+            )
+            append_csv_row(
+                control / "costs.csv",
+                {
+                    "cost_id": "C-FOREIGN-SCOPE",
+                    "date": "2026-01-06",
+                    "work_item_id": "W-FOREIGN",
+                    "amount": 999,
+                    "currency": "RUB",
+                    "status": "confirmed_paid",
+                    "evidence_document_id": "DOC-PAY",
+                    "evidence_locator": "строка 2",
+                },
+            )
+            package_path = project / "management-package.json"
+            package_path.write_text(
+                json.dumps(management_package(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            before = (control / "cost_plans.jsonl").read_bytes()
+            preview = run_script(MANAGEMENT, project, package_path)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            preview_value = json.loads(preview.stdout)
+            self.assertEqual(preview_value["calculated_cost_totals"]["CPL-1"], 300.0)
+            self.assertEqual(preview_value["calculated_schedule_finishes"]["SPL-1"], "2026-01-14")
+            self.assertEqual((control / "cost_plans.jsonl").read_bytes(), before)
+
+            applied = run_script(MANAGEMENT, project, package_path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            cost_plan = read_jsonl(control / "cost_plans.jsonl")[0]
+            schedule_plan = read_jsonl(control / "schedule_plans.jsonl")[0]
+            snapshot = read_jsonl(control / "control_snapshots.jsonl")[0]
+            self.assertEqual(cost_plan["total_amount"], 300.0)
+            self.assertEqual(schedule_plan["calculated_finish"], "2026-01-14")
+            self.assertTrue(schedule_plan["activities"][0]["is_critical"])
+            self.assertEqual(snapshot["metrics"]["current_budget"], 350.0)
+            self.assertEqual(snapshot["metrics"]["confirmed_actual_cost"], 40.0)
+            self.assertEqual(snapshot["metrics"]["forecast_at_completion"], 290.0)
+            self.assertEqual(snapshot["metrics"]["cost_variance_at_completion"], 60.0)
+            self.assertEqual(snapshot["metrics"]["schedule_variance_calendar_days"], 2)
+
+            dashboard = run_script(DASHBOARD, project)
+            self.assertEqual(dashboard.returncode, 0, dashboard.stderr)
+            report = (control / "reports" / "project-status.md").read_text(encoding="utf-8")
+            self.assertIn("Управленческая база и прогноз", report)
+            self.assertIn("Текущий бюджет: 350.00 RUB", report)
+            self.assertIn("Прогноз итоговой стоимости: 290.00 RUB", report)
+            duplicate = run_script(MANAGEMENT, project, package_path, "--apply")
+            self.assertEqual(duplicate.returncode, 2)
+            self.assertIn("append-only", duplicate.stderr)
+
+    def test_management_cycle_rejects_dependency_cycle_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.prepare_management_project(project)
+            package = management_package()
+            package["schedule_plans"][0]["activities"][0]["predecessors"] = [
+                {"activity_id": "ACT-2", "relationship": "FS", "lag_workdays": 0}
+            ]
+            package_path = project / "cyclic-management-package.json"
+            package_path.write_text(json.dumps(package, ensure_ascii=False), encoding="utf-8")
+            before = file_snapshot(project)
+            rejected = run_script(MANAGEMENT, project, package_path, "--apply")
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("dependency cycle", rejected.stderr)
+            self.assertEqual(file_snapshot(project), before)
+
+    def test_management_cycle_rejects_impossible_schedule_constraint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.prepare_management_project(project)
+            package = management_package()
+            package["schedule_plans"][0]["activities"][1]["not_after"] = "2026-01-13"
+            package_path = project / "impossible-schedule-package.json"
+            package_path.write_text(json.dumps(package, ensure_ascii=False), encoding="utf-8")
+            rejected = run_script(MANAGEMENT, project, package_path)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("violates declared date constraints", rejected.stderr)
+
+    def test_audit_detects_invalid_management_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            write_jsonl(
+                project / ".home-control" / "cost_plans.jsonl",
+                {
+                    "cost_plan_id": "CPL-BROKEN",
+                    "plan_series_id": "COST-BROKEN",
+                    "revision": 1,
+                    "status": "ready_for_baseline",
+                    "baseline_snapshot_id": "BL-UNKNOWN",
+                    "valuation_date": "2026-01-01",
+                    "currency": "RUB",
+                    "items": [],
+                },
+            )
+            audited = run_script(AUDIT, project)
+            self.assertEqual(audited.returncode, 1, audited.stderr)
+            self.assertIn("management-cycle", audited.stdout)
+            self.assertIn("known BaselineSnapshot", audited.stdout)
 
 
 if __name__ == "__main__":

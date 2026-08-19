@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from inspect_project import is_linklike, require_ready_project
+from management_model import REGISTRIES as MANAGEMENT_REGISTRIES, validate_and_enrich
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
@@ -2118,6 +2119,53 @@ def audit(root: Path) -> list[str]:
     for row in tables["procurement.csv"]:
         if row.get("status", "").strip() == "accepted" and not document_ok(row, "evidence_document_id", active_documents):
             warnings.append(f"procurement.csv:{row.get('procurement_id', 'без ID')}: accepted without active evidence document")
+
+    management_records = {
+        key: [record for _, record in jsonl_records[filename]]
+        for key, (filename, _) in MANAGEMENT_REGISTRIES.items()
+    }
+    registered_sources = {project_id, *active_documents}
+    for identifiers in jsonl_ids.values():
+        registered_sources.update(identifiers)
+    for filename, id_field in CSV_IDS.items():
+        registered_sources.update(
+            row.get(id_field, "").strip()
+            for row in tables[filename]
+            if row.get(id_field, "").strip()
+        )
+    _, management_errors = validate_and_enrich(
+        management_records,
+        {
+            "sources": registered_sources,
+            "decisions": jsonl_ids["decisions.jsonl"],
+            "baseline_snapshots": jsonl_ids["baseline_snapshots.jsonl"],
+            "project_packages": jsonl_ids["project_packages.jsonl"],
+            "quote_items": jsonl_ids["quote_items.jsonl"],
+            "price_observations": jsonl_ids["price_observations.jsonl"],
+            "work_items": {
+                row.get("work_item_id", "").strip()
+                for row in tables["work_items.csv"]
+                if row.get("work_item_id", "").strip()
+            },
+            "changes": {
+                row.get("change_id", "").strip()
+                for row in tables["changes.csv"]
+                if row.get("change_id", "").strip()
+            },
+            "approved_changes": {
+                row.get("change_id", "").strip()
+                for row in tables["changes.csv"]
+                if row.get("change_id", "").strip() and row.get("status", "").strip() == "approved"
+            },
+            "cost_rows": {
+                row.get("cost_id", "").strip(): row
+                for row in tables["costs.csv"]
+                if row.get("cost_id", "").strip()
+            },
+            "active_documents": active_documents,
+        },
+    )
+    warnings.extend(f"management-cycle: {error}" for error in management_errors)
 
     validate_fact_records(jsonl_records, jsonl_ids, active_documents, document_versions, warnings)
 
