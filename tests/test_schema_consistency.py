@@ -12,6 +12,10 @@ STRUCTURE_FILE = PLUGIN_ROOT / "schemas" / "project-structure.json"
 ONTOLOGY_FILE = PLUGIN_ROOT / "schemas" / "ontology.json"
 PROPOSAL_CONTRACT_FILE = PLUGIN_ROOT / "schemas" / "proposal-review-contract.json"
 SKILLS_ROOT = PLUGIN_ROOT / "skills"
+CODEX_MARKETPLACE_FILE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+CLAUDE_MARKETPLACE_FILE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+CODEX_MANIFEST_FILE = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+CLAUDE_MANIFEST_FILE = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -24,6 +28,36 @@ class SchemaConsistencyTests(unittest.TestCase):
         cls.structure = json.loads(STRUCTURE_FILE.read_text(encoding="utf-8"))
         cls.ontology = json.loads(ONTOLOGY_FILE.read_text(encoding="utf-8"))
         cls.proposal_contract = json.loads(PROPOSAL_CONTRACT_FILE.read_text(encoding="utf-8"))
+        cls.codex_marketplace = json.loads(CODEX_MARKETPLACE_FILE.read_text(encoding="utf-8"))
+        cls.claude_marketplace = json.loads(CLAUDE_MARKETPLACE_FILE.read_text(encoding="utf-8"))
+        cls.codex_manifest = json.loads(CODEX_MANIFEST_FILE.read_text(encoding="utf-8"))
+        cls.claude_manifest = json.loads(CLAUDE_MANIFEST_FILE.read_text(encoding="utf-8"))
+
+    def test_codex_and_claude_manifests_share_identity_and_skills(self) -> None:
+        plugin_name = "home-project-control"
+        marketplace_name = "home-project-control-marketplace"
+
+        self.assertEqual(self.codex_manifest["name"], plugin_name)
+        self.assertEqual(self.claude_manifest["name"], plugin_name)
+        self.assertEqual(self.codex_manifest["skills"], "./skills/")
+        self.assertEqual(self.claude_manifest["skills"], "./skills/")
+        self.assertEqual(
+            self.claude_manifest["version"],
+            self.codex_manifest["version"].split("+", maxsplit=1)[0],
+        )
+
+        self.assertEqual(self.codex_marketplace["name"], marketplace_name)
+        self.assertEqual(self.claude_marketplace["name"], marketplace_name)
+        self.assertEqual(self.codex_marketplace["plugins"][0]["name"], plugin_name)
+        self.assertEqual(self.claude_marketplace["plugins"][0]["name"], plugin_name)
+        self.assertEqual(
+            self.codex_marketplace["plugins"][0]["source"]["path"],
+            "./plugins/home-project-control",
+        )
+        self.assertEqual(
+            self.claude_marketplace["plugins"][0]["source"],
+            "./plugins/home-project-control",
+        )
 
     def test_jsonl_registry_metadata_matches_ontology(self) -> None:
         registries = self.structure["jsonl_files"]
@@ -75,8 +109,9 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
         contract = self.proposal_contract
-        self.assertEqual(contract["contract_version"], "1.1")
+        self.assertEqual(contract["contract_version"], "1.2")
         self.assertIn("1.0", contract["legacy_contract_versions"])
+        self.assertIn("1.1", contract["legacy_contract_versions"])
         self.assertEqual(
             set(contract["check_statuses"]),
             set(self.ontology["dimensions"]["mandatory_check_status"]),

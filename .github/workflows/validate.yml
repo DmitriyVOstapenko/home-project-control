@@ -19,6 +19,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Validate JSON files
         shell: pwsh
         run: |
@@ -31,4 +36,9 @@ jobs:
 
       - name: Test project utilities
         run: python -m unittest discover -s tests -v
+
+      - name: Validate Claude Code marketplace and plugin
+        run: |
+          npx --yes @anthropic-ai/claude-code@2.1.234 plugin validate . --strict
+          npx --yes @anthropic-ai/claude-code@2.1.234 plugin validate plugins/home-project-control --strict
 

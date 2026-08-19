@@ -83,6 +83,15 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     site_plan = review.get("site_verification_plan", []) if isinstance(review.get("site_verification_plan"), list) else []
     acceptance_plan = review.get("acceptance_plan", []) if isinstance(review.get("acceptance_plan"), list) else []
     priority_risks = review.get("priority_risks", []) if isinstance(review.get("priority_risks"), list) else []
+    baseline_mode = str(review.get("baseline_assessment_mode", "legacy_unspecified")).strip()
+    baseline_snapshot_id = str(review.get("baseline_snapshot_id", "")).strip()
+    baseline_applicability_scope = str(review.get("baseline_applicability_scope", "")).strip()
+    baseline_limitations = (
+        review.get("baseline_limitations", []) if isinstance(review.get("baseline_limitations"), list) else []
+    )
+    reference_comparisons = (
+        review.get("reference_comparisons", []) if isinstance(review.get("reference_comparisons"), list) else []
+    )
 
     positive = [
         f"{item.get('statement', item.get('description', item.get('finding_id')))} ({source_label(item)})"
@@ -142,6 +151,9 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - Документ: `{review.get('source_document_id', '')}`, версия `{review.get('document_version', '')}`
 - Направления: {', '.join(str(value) for value in disciplines) or 'не указаны'}
 - Коммерческая запись: `{review.get('quote_id', '')}`
+- Базовый режим: `{baseline_mode}`
+- Снимок базовой линии: `{baseline_snapshot_id or 'не принят'}`
+- Применённая область базы: {baseline_applicability_scope or 'не применяется'}
 
 ### Решающие причины
 
@@ -174,6 +186,10 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 ## Существенные препятствия для решения
 
 {bullets(blockers)}
+
+## Ограничения из-за базовой линии
+
+{bullets(baseline_limitations)}
 
 ## Незавершённые пункты обязательного контракта
 
@@ -241,6 +257,15 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
             f"`{match.get('requirement_id', '')}` — {requirement.get('requirement', requirement.get('statement', ''))}; "
             f"статус `{match.get('status', '')}`; строки КП: {', '.join(match.get('quote_item_ids', [])) or 'нет'}"
         )
+    reference_lines = [
+        f"`{value.get('document_id', '')}` v{value.get('document_version', '')} "
+        f"[{value.get('status', '')}] {value.get('statement', '')}; роль: {value.get('project_role', '')}; "
+        f"область: {value.get('applicability_scope', '')}; локатор: {value.get('locator', '')}; "
+        f"ограничение: {value.get('limitations', '')}; строки КП: "
+        f"{', '.join(value.get('quote_item_ids', [])) or 'нет'}"
+        for value in reference_comparisons
+        if isinstance(value, dict)
+    ]
     item_lines = [
         f"`{item.get('quote_item_id', '')}` — {item.get('raw_text', '')}; сумма: {item.get('amount', 'не указана')} "
         f"{item.get('currency', quote.get('currency', ''))}; локатор: {item.get('locator', '')}"
@@ -336,6 +361,14 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         for item in priority_risks
         if isinstance(item, dict)
     ]
+    if baseline_mode == "accepted_baseline":
+        baseline_matrix_section = f"""## Матрица принятой базовой линии и КП
+
+{bullets(matrix_lines)}"""
+    else:
+        baseline_matrix_section = """## Соответствие принятой базовой линии
+
+Не оценивалось: применяемая базовая линия не принята. Сопоставления с документами выше имеют только справочный статус."""
     dossier = f"""# Полное досье проверки КП {review_id}
 
 ## Объект проверки и прослеживаемость
@@ -346,6 +379,17 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - Инвентаризация: `{review.get('inventory_id', '')}`
 - Журналы чтения: {', '.join(review.get('reading_run_ids', []))}
 - Направления: {', '.join(str(value) for value in disciplines)}
+- Базовый режим: `{baseline_mode}`
+- Снимок базовой линии: `{baseline_snapshot_id or 'не принят'}`
+- Применённая область базы: {baseline_applicability_scope or 'не применяется'}
+
+### Зависимые ограничения
+
+{bullets(baseline_limitations)}
+
+### Справочные сопоставления
+
+{bullets(reference_lines)}
 
 ## Прорабский вывод
 
@@ -361,9 +405,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(item_lines)}
 
-## Матрица утверждённых требований и КП
-
-{bullets(matrix_lines)}
+{baseline_matrix_section}
 
 Непривязанные строки КП: {', '.join(review.get('unmatched_quote_item_ids', [])) or 'нет'}.
 
