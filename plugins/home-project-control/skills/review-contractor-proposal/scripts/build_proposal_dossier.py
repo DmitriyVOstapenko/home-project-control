@@ -47,6 +47,12 @@ def source_label(record: dict) -> str:
     return base or linked_text or "источник не указан"
 
 
+def amount_label(value: object, currency: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "не подтверждено"
+    return f"{value:,.2f} {currency}".replace(",", " ").replace(".00 ", " ")
+
+
 def build_reports(root: Path, review_id: str) -> dict[str, str]:
     control = root / ".home-control"
     reviews = read_jsonl(control / "proposal_reviews.jsonl", "proposal_review_id")
@@ -68,6 +74,15 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     blockers = review.get("essential_blockers", []) if isinstance(review.get("essential_blockers"), list) else []
     questions = review.get("contractor_questions", []) if isinstance(review.get("contractor_questions"), list) else []
     disciplines = review.get("disciplines", []) if isinstance(review.get("disciplines"), list) else []
+    foreman = review.get("foreman_assessment", {}) if isinstance(review.get("foreman_assessment"), dict) else {}
+    cost = review.get("cost_exposure", {}) if isinstance(review.get("cost_exposure"), dict) else {}
+    currency = str(cost.get("currency", quote.get("currency", ""))).strip()
+    scope_rows = review.get("scope_boundary_matrix", []) if isinstance(review.get("scope_boundary_matrix"), list) else []
+    constructability = review.get("constructability_walkthrough", []) if isinstance(review.get("constructability_walkthrough"), list) else []
+    contractor_assessment = review.get("contractor_assessment", []) if isinstance(review.get("contractor_assessment"), list) else []
+    site_plan = review.get("site_verification_plan", []) if isinstance(review.get("site_verification_plan"), list) else []
+    acceptance_plan = review.get("acceptance_plan", []) if isinstance(review.get("acceptance_plan"), list) else []
+    priority_risks = review.get("priority_risks", []) if isinstance(review.get("priority_risks"), list) else []
 
     positive = [
         f"{item.get('statement', item.get('description', item.get('finding_id')))} ({source_label(item)})"
@@ -91,14 +106,70 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         f"{value.get('solution', value.get('result', ''))}; применимость: {value.get('project_fit', value.get('rationale', ''))}"
         for value in review.get("technical_alternative_assessments", [])
     ]
+    scope_gaps = [
+        f"{row.get('scope_id', 'без ID')}: {gap}"
+        for row in scope_rows
+        if isinstance(row, dict)
+        for gap in row.get("gaps", [])
+        if str(gap).strip()
+    ]
+    risk_lines = [
+        f"{risk.get('urgency', 'без срока')} / {', '.join(risk.get('impact_lanes', []))}: "
+        f"{risk.get('consequence', '')}; действие: {risk.get('owner_action', '')}"
+        for risk in priority_risks
+        if isinstance(risk, dict)
+    ]
+    open_site_checks = [
+        f"{item.get('verification_id', 'без ID')} [{item.get('status', '')}]: {item.get('subject', '')}; "
+        f"до: {item.get('required_before', '')}"
+        for item in site_plan
+        if isinstance(item, dict) and item.get("status") not in {"completed", "not_applicable"}
+    ]
+    unknown_costs = [
+        f"{item.get('description', '')}: {item.get('reason', '')}"
+        + (" (блокирует договор)" if item.get("blocking") is True else "")
+        for item in cost.get("unknown_exposures", [])
+        if isinstance(item, dict)
+    ]
     owner = f"""# Карточка решения по КП {review_id}
 
-## Статус
+## Прорабский вывод
 
 - Состояние проверки: `{review.get('status', 'unknown')}`
+- Вердикт: `{foreman.get('verdict', 'не сформирован')}`
+- Готовность: `{foreman.get('decision_readiness', 'не определена')}`
+- Вывод: {foreman.get('summary', 'не сформирован')}
 - Документ: `{review.get('source_document_id', '')}`, версия `{review.get('document_version', '')}`
 - Направления: {', '.join(str(value) for value in disciplines) or 'не указаны'}
 - Коммерческая запись: `{review.get('quote_id', '')}`
+
+### Решающие причины
+
+{bullets(foreman.get('decisive_reasons', []))}
+
+## Деньги
+
+- Заявлено в КП: {amount_label(cost.get('quoted_total'), currency)}
+- Подтверждённо включено: {amount_label(cost.get('confirmed_included_amount'), currency)}
+- Известно исключено: {amount_label(cost.get('known_excluded_amount'), currency)}
+- Расчётный диапазон полной стоимости: {amount_label(cost.get('estimated_total_low'), currency)} — {amount_label(cost.get('estimated_total_high'), currency)}
+- Статус расчёта: `{cost.get('status', 'не указан')}`
+
+### Пока нельзя посчитать
+
+{bullets(unknown_costs)}
+
+## Приоритетные риски
+
+{bullets(risk_lines)}
+
+Сводка: {review.get('risk_summary', 'не сформирована')}
+
+## Пробелы объёма и проверки на объекте
+
+{bullets(scope_gaps)}
+
+{bullets(open_site_checks)}
 
 ## Существенные препятствия для решения
 
@@ -124,6 +195,18 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(technical_options)}
 
+## Условия до договора
+
+{bullets(foreman.get('conditions_before_contract', []))}
+
+## Условия до начала работ
+
+{bullets(foreman.get('conditions_before_work', []))}
+
+## Следующие действия владельца
+
+{bullets(foreman.get('owner_next_actions', []))}
+
 Эта карточка не заменяет решение владельца и обязательную проверку профильным специалистом там, где она требуется.
 """
 
@@ -134,6 +217,14 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 ## Вопросы и недостающие данные
 
 {bullets(questions)}
+
+## Уточнения по границам объёма
+
+{bullets(scope_gaps)}
+
+## Данные для проверки на объекте
+
+{bullets(open_site_checks)}
 
 ## Требования к ответу
 
@@ -192,8 +283,58 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         f"`{value.get('search_run_id', '')}` [{value.get('status', '')}], {value.get('checked_at', '')}, "
         f"регион: {value.get('region', '')}; запросы: {', '.join(value.get('queries', []))}; "
         f"источники: {', '.join(value.get('source_urls', [])) or 'нет'}; "
-        f"кандидаты: {', '.join(value.get('candidate_contractor_ids', [])) or 'нет'}"
+        f"подрядчики: {', '.join(value.get('candidate_contractor_ids', [])) or 'нет'}; "
+        f"поставщики: {', '.join(value.get('candidate_supplier_ids', [])) or 'нет'}; оценки: "
+        + " | ".join(
+            f"{candidate.get('counterparty_kind', '')}:{candidate.get('counterparty_id', '')} "
+            f"[{candidate.get('comparability_status', '')}] — {candidate.get('basis', '')}; "
+            f"не хватает: {', '.join(candidate.get('missing_information', [])) or 'ничего'}"
+            for candidate in value.get("candidate_assessments", [])
+            if isinstance(candidate, dict)
+        )
         for value in review.get("search_runs", [])
+    ]
+    scope_lines = [
+        f"`{row.get('scope_id', '')}`: {row.get('result', '')}; строки КП: "
+        f"{', '.join(row.get('quote_item_ids', [])) or 'нет'}; требования: "
+        f"{', '.join(row.get('requirement_ids', [])) or 'нет'}; пробелы: "
+        f"{', '.join(row.get('gaps', [])) or 'нет'}; ответственность: "
+        + "; ".join(f"{role}={party}" for role, party in row.get("responsibilities", {}).items())
+        for row in scope_rows
+        if isinstance(row, dict)
+    ]
+    constructability_lines = [
+        f"`{item.get('phase_id', '')}` [{item.get('status', '')}]: {item.get('result', '')}; "
+        f"риски: {', '.join(item.get('risks', [])) or 'нет'}; действия: {', '.join(item.get('actions', [])) or 'нет'}"
+        for item in constructability
+        if isinstance(item, dict)
+    ]
+    contractor_lines = [
+        f"`{item.get('axis_id', '')}` [{item.get('status', '')}]: {item.get('result', '')}"
+        for item in contractor_assessment
+        if isinstance(item, dict)
+    ]
+    site_lines = [
+        f"`{item.get('verification_id', '')}` [{item.get('status', '')}]: {item.get('subject', '')}; "
+        f"метод: {item.get('method', '')}; ответственный: {item.get('responsible_role', '')}; "
+        f"до: {item.get('required_before', '')}; последствие: {item.get('consequence_if_unverified', '')}"
+        for item in site_plan
+        if isinstance(item, dict)
+    ]
+    acceptance_lines = [
+        f"`{item.get('acceptance_id', '')}`: {item.get('result', '')}; критерий: {item.get('criterion', '')}; "
+        f"метод: {item.get('method', '')}; момент: {item.get('timing', '')}; "
+        f"ответственный: {item.get('responsible_party', '')}; доказательства: "
+        f"{', '.join(item.get('evidence_required', [])) or 'нет'}"
+        for item in acceptance_plan
+        if isinstance(item, dict)
+    ]
+    priority_risk_lines = [
+        f"`{item.get('risk_id', '')}` -> `{item.get('finding_id', '')}` [{item.get('urgency', '')}; "
+        f"{', '.join(item.get('impact_lanes', []))}]: {item.get('consequence', '')}; "
+        f"снижение: {item.get('mitigation', '')}; действие владельца: {item.get('owner_action', '')}"
+        for item in priority_risks
+        if isinstance(item, dict)
     ]
     dossier = f"""# Полное досье проверки КП {review_id}
 
@@ -205,6 +346,16 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - Инвентаризация: `{review.get('inventory_id', '')}`
 - Журналы чтения: {', '.join(review.get('reading_run_ids', []))}
 - Направления: {', '.join(str(value) for value in disciplines)}
+
+## Прорабский вывод
+
+- Вердикт: `{foreman.get('verdict', 'не сформирован')}`
+- Готовность: `{foreman.get('decision_readiness', 'не определена')}`
+- Вывод: {foreman.get('summary', 'не сформирован')}
+
+Решающие причины:
+
+{bullets(foreman.get('decisive_reasons', []))}
 
 ## Строки предложения
 
@@ -219,6 +370,45 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 ## Профессиональные технические проверки
 
 {bullets(check_lines)}
+
+## Границы объёма и ответственности
+
+{bullets(scope_lines)}
+
+## Проход исполнимости
+
+{bullets(constructability_lines)}
+
+## Полная денежная экспозиция
+
+- Заявлено: {amount_label(cost.get('quoted_total'), currency)}
+- Подтверждённо включено: {amount_label(cost.get('confirmed_included_amount'), currency)}
+- Известно исключено: {amount_label(cost.get('known_excluded_amount'), currency)}
+- Диапазон: {amount_label(cost.get('estimated_total_low'), currency)} — {amount_label(cost.get('estimated_total_high'), currency)}
+- Формула: `{cost.get('formula', '')}`
+- Статус: `{cost.get('status', '')}`
+
+Неизвестная экспозиция:
+
+{bullets(unknown_costs)}
+
+## Проверка подрядчика или поставщика
+
+{bullets(contractor_lines)}
+
+## План проверки на объекте
+
+{bullets(site_lines)}
+
+## План приёмки
+
+{bullets(acceptance_lines)}
+
+## Приоритетные риски
+
+{bullets(priority_risk_lines)}
+
+Сводка: {review.get('risk_summary', 'не сформирована')}
 
 ## Обязательный универсальный контракт
 
@@ -235,6 +425,8 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 ## Дополнительный анализ модели
 
 {bullets(additional_lines)}
+
+Сводка дополнительного анализа: {review.get('additional_analysis_summary', 'не сформирована')}
 
 ## Проверяемые расчёты
 
@@ -257,6 +449,20 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 {bullets(blockers)}
 
 {bullets(questions)}
+
+## Условия и следующие действия
+
+До договора:
+
+{bullets(foreman.get('conditions_before_contract', []))}
+
+До начала работ:
+
+{bullets(foreman.get('conditions_before_work', []))}
+
+Действия владельца:
+
+{bullets(foreman.get('owner_next_actions', []))}
 
 ## Ограничение вывода
 

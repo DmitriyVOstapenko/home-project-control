@@ -219,15 +219,30 @@ def validate_review_contract(
     review: dict,
     registered_ids: set[str],
     known_alternatives: set[str],
+    known_findings: set[str] | None = None,
 ) -> list[str]:
     """Return machine-checkable contract errors for one ProposalReview."""
     errors: list[str] = []
     statuses = set(PROPOSAL_CONTRACT["check_statuses"])
     ready_statuses = set(PROPOSAL_CONTRACT["ready_statuses"])
+    verification_statuses = set(DIMENSIONS["verification_status"])
     expected_mandatory = [value["check_id"] for value in PROPOSAL_CONTRACT["universal_checks"]]
+    non_waivable_mandatory = set(PROPOSAL_CONTRACT.get("non_waivable_universal_check_ids", []))
     expected_axes = [value["axis_id"] for value in PROPOSAL_CONTRACT["discipline_axes"]]
     expected_tracks = [value["track_id"] for value in PROPOSAL_CONTRACT["technical_alternative_tracks"]]
+    expected_roles = set(PROPOSAL_CONTRACT.get("scope_responsibility_roles", []))
+    expected_phases = [value["phase_id"] for value in PROPOSAL_CONTRACT.get("constructability_phases", [])]
+    expected_contractor_axes = [
+        value["axis_id"] for value in PROPOSAL_CONTRACT.get("contractor_assessment_axes", [])
+    ]
     disciplines = review.get("disciplines") if isinstance(review.get("disciplines"), list) else []
+    manifest = review.get("completion_manifest")
+    recorded_version = manifest.get("contract_version") if isinstance(manifest, dict) else None
+    current_version = PROPOSAL_CONTRACT["contract_version"]
+    legacy_versions = set(PROPOSAL_CONTRACT.get("legacy_contract_versions", []))
+    current_contract = recorded_version == current_version
+    if recorded_version not in {current_version, *legacy_versions}:
+        errors.append("completion_manifest has an unknown contract_version")
 
     def objects(field: str) -> list[dict]:
         value = review.get(field)
@@ -235,6 +250,38 @@ def validate_review_contract(
             errors.append(f"{field} must be an array of objects")
             return []
         return value
+
+    def strings(value: object, label: str, allow_empty: bool = True) -> list[str]:
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+            errors.append(f"{label} must be a string array")
+            return []
+        cleaned = [item.strip() for item in value]
+        if not allow_empty and not cleaned:
+            errors.append(f"{label} must not be empty")
+        return cleaned
+
+    def validate_sources(value: object, label: str, allow_empty: bool = False) -> list[str]:
+        sources = strings(value, f"{label} source_ids", allow_empty=allow_empty)
+        if any(source not in registered_ids for source in sources):
+            errors.append(f"{label} refers to an unknown source")
+        return sources
+
+    def validate_observations(item: dict, label: str) -> None:
+        observations = item.get("observations")
+        if not isinstance(observations, list) or not observations or any(
+            not isinstance(value, dict) for value in observations
+        ):
+            errors.append(f"{label} requires evidence observations")
+            return
+        for number, observation in enumerate(observations, 1):
+            observation_label = f"{label} observation {number}"
+            if not str(observation.get("statement", "")).strip():
+                errors.append(f"{observation_label} has no statement")
+            if not str(observation.get("locator", "")).strip():
+                errors.append(f"{observation_label} has no locator")
+            if observation.get("verification_status") not in verification_statuses:
+                errors.append(f"{observation_label} has an unknown verification_status")
+            validate_sources(observation.get("source_ids", []), observation_label)
 
     def validate_item(item: dict, label: str, require_sources: bool = True) -> str:
         status = str(item.get("status", "")).strip()
@@ -246,14 +293,19 @@ def validate_review_contract(
             errors.append(f"{label} has no result")
         if status in {"not_applicable", "blocked", "requires_specialist"} and not rationale:
             errors.append(f"{label} requires a rationale")
-        sources = item.get("source_ids", [])
-        if not isinstance(sources, list) or any(not isinstance(value, str) or not value.strip() for value in sources):
-            errors.append(f"{label} source_ids must be a string array")
-            sources = []
+        sources = validate_sources(item.get("source_ids", []), label, allow_empty=True)
         if require_sources and status == "completed" and not sources:
             errors.append(f"{label} completed without sources")
-        if any(value not in registered_ids for value in sources):
-            errors.append(f"{label} refers to an unknown source")
+        if current_contract:
+            if status == "completed":
+                validate_observations(item, label)
+            elif status == "not_applicable":
+                if not str(item.get("applicability_evidence", "")).strip():
+                    errors.append(f"{label} not_applicable without applicability_evidence")
+                if not sources:
+                    errors.append(f"{label} not_applicable without sources")
+            elif status in {"blocked", "requires_specialist"}:
+                strings(item.get("required_inputs", []), f"{label} required_inputs", allow_empty=False)
         return status
 
     mandatory = objects("mandatory_checks")
@@ -262,7 +314,10 @@ def validate_review_contract(
     for item in mandatory:
         identifier = str(item.get("check_id", "")).strip()
         mandatory_ids.append(identifier)
-        required_statuses.append(validate_item(item, f"mandatory check {identifier or 'without ID'}"))
+        item_status = validate_item(item, f"mandatory check {identifier or 'without ID'}")
+        required_statuses.append(item_status)
+        if current_contract and identifier in non_waivable_mandatory and item_status == "not_applicable":
+            errors.append(f"mandatory check {identifier} cannot be not_applicable")
     if sorted(mandatory_ids) != sorted(expected_mandatory) or len(mandatory_ids) != len(set(mandatory_ids)):
         errors.append("mandatory_checks do not cover the current universal contract exactly once")
 
@@ -275,13 +330,19 @@ def validate_review_contract(
         discipline_keys.append(key)
         if discipline not in disciplines or axis not in expected_axes:
             errors.append(f"discipline check {key} is outside the declared contract")
-        required_statuses.append(validate_item(item, f"discipline check {key}"))
+        item_status = validate_item(item, f"discipline check {key}")
+        required_statuses.append(item_status)
+        if current_contract and item_status == "completed":
+            strings(item.get("criteria_checked", []), f"discipline check {key} criteria_checked", allow_empty=False)
+            strings(item.get("field_risks", []), f"discipline check {key} field_risks")
+            strings(item.get("required_site_checks", []), f"discipline check {key} required_site_checks")
     expected_discipline_keys = [f"{discipline}|{axis}" for discipline in disciplines for axis in expected_axes]
     if sorted(discipline_keys) != sorted(expected_discipline_keys) or len(discipline_keys) != len(set(discipline_keys)):
         errors.append("discipline_checks do not cover every required axis for every discipline exactly once")
 
     alternatives = objects("technical_alternative_assessments")
     track_ids: list[str] = []
+    alternatives_by_id: dict[str, list[dict]] = {}
     for item in alternatives:
         track_id = str(item.get("track_id", "")).strip()
         track_ids.append(track_id)
@@ -294,11 +355,35 @@ def validate_review_contract(
         if any(value not in known_alternatives for value in linked):
             errors.append(f"technical alternative {track_id} refers to an unknown Alternative")
         if status == "completed":
-            for field in ("solution", "project_fit", "benefits", "drawbacks", "implementation_impacts", "lifecycle_cost_notes"):
+            for field in (
+                "solution",
+                "project_fit",
+                "benefits",
+                "drawbacks",
+                "implementation_impacts",
+                "lifecycle_cost_notes",
+                "performance_basis",
+                "cost_basis",
+                "constructability_basis",
+                "recommendation",
+            ):
                 if not str(item.get(field, "")).strip():
                     errors.append(f"technical alternative {track_id} lacks {field}")
+            if current_contract and not linked:
+                errors.append(f"technical alternative {track_id} completed without a linked Alternative")
+            for alternative_id in linked:
+                alternatives_by_id.setdefault(alternative_id, []).append(item)
     if sorted(track_ids) != sorted(expected_tracks) or len(track_ids) != len(set(track_ids)):
         errors.append("technical_alternative_assessments do not cover every required track exactly once")
+    if current_contract:
+        for alternative_id, linked_items in alternatives_by_id.items():
+            completed_items = [item for item in linked_items if item.get("status") == "completed"]
+            if len(completed_items) > 1 and any(
+                not str(item.get("shared_alternative_justification", "")).strip() for item in completed_items
+            ):
+                errors.append(
+                    f"Alternative {alternative_id} is reused across technical tracks without justification"
+                )
 
     additional = objects("additional_model_checks")
     additional_ids: list[str] = []
@@ -307,22 +392,207 @@ def validate_review_contract(
         additional_ids.append(identifier)
         if not identifier or not str(item.get("question", "")).strip():
             errors.append("additional model check requires check_id and question")
-        validate_item(item, f"additional model check {identifier or 'without ID'}", require_sources=False)
+        validate_item(item, f"additional model check {identifier or 'without ID'}")
     if len(additional_ids) != len(set(additional_ids)):
         errors.append("additional_model_checks contain duplicate check_id values")
 
-    manifest = review.get("completion_manifest")
+    scope_ids: list[str] = []
+    phase_ids: list[str] = []
+    contractor_axis_ids: list[str] = []
+    site_verification_ids: list[str] = []
+    acceptance_plan_ids: list[str] = []
+    priority_risk_ids: list[str] = []
+    site_statuses: list[str] = []
+    contractor_statuses: list[str] = []
+    cost_contract_blocked = False
+
+    if current_contract:
+        if not str(review.get("additional_analysis_summary", "")).strip():
+            errors.append("additional_analysis_summary is required for the current contract")
+
+        foreman = review.get("foreman_assessment")
+        if not isinstance(foreman, dict):
+            errors.append("foreman_assessment must be an object")
+            foreman = {}
+        if foreman.get("verdict") not in PROPOSAL_CONTRACT["foreman_verdicts"]:
+            errors.append("foreman_assessment has an unknown verdict")
+        readiness = foreman.get("decision_readiness")
+        if readiness not in PROPOSAL_CONTRACT["decision_readiness_statuses"]:
+            errors.append("foreman_assessment has an unknown decision_readiness")
+        if not str(foreman.get("summary", "")).strip():
+            errors.append("foreman_assessment has no summary")
+        strings(foreman.get("decisive_reasons", []), "foreman_assessment.decisive_reasons", allow_empty=False)
+        strings(foreman.get("conditions_before_contract", []), "foreman_assessment.conditions_before_contract")
+        strings(foreman.get("conditions_before_work", []), "foreman_assessment.conditions_before_work")
+        strings(foreman.get("owner_next_actions", []), "foreman_assessment.owner_next_actions", allow_empty=False)
+        validate_sources(foreman.get("source_ids", []), "foreman_assessment")
+
+        scope_rows = objects("scope_boundary_matrix")
+        for row in scope_rows:
+            scope_id = str(row.get("scope_id", "")).strip()
+            scope_ids.append(scope_id)
+            if not scope_id or not str(row.get("result", "")).strip():
+                errors.append("scope boundary row requires scope_id and result")
+            responsibilities = row.get("responsibilities")
+            if not isinstance(responsibilities, dict) or set(responsibilities) != expected_roles or any(
+                not isinstance(value, str) or not value.strip() for value in responsibilities.values()
+            ):
+                errors.append(f"scope boundary {scope_id or 'without ID'} must assign every responsibility role")
+            strings(row.get("quote_item_ids", []), f"scope boundary {scope_id} quote_item_ids", allow_empty=False)
+            strings(row.get("requirement_ids", []), f"scope boundary {scope_id} requirement_ids")
+            strings(row.get("gaps", []), f"scope boundary {scope_id} gaps")
+            validate_sources(row.get("source_ids", []), f"scope boundary {scope_id}")
+        if not scope_rows or len(scope_ids) != len(set(scope_ids)) or any(not value for value in scope_ids):
+            errors.append("scope_boundary_matrix requires unique non-empty scope rows")
+
+        phases = objects("constructability_walkthrough")
+        for phase in phases:
+            phase_id = str(phase.get("phase_id", "")).strip()
+            phase_ids.append(phase_id)
+            phase_status = validate_item(phase, f"constructability phase {phase_id or 'without ID'}")
+            required_statuses.append(phase_status)
+            strings(phase.get("risks", []), f"constructability phase {phase_id} risks")
+            strings(phase.get("actions", []), f"constructability phase {phase_id} actions")
+        if sorted(phase_ids) != sorted(expected_phases) or len(phase_ids) != len(set(phase_ids)):
+            errors.append("constructability_walkthrough does not cover every required phase exactly once")
+
+        cost = review.get("cost_exposure")
+        if not isinstance(cost, dict):
+            errors.append("cost_exposure must be an object")
+            cost = {}
+        if not str(cost.get("currency", "")).strip() or not str(cost.get("formula", "")).strip():
+            errors.append("cost_exposure requires currency and formula")
+        if cost.get("status") not in DIMENSIONS["calculation_status"]:
+            errors.append("cost_exposure has an unknown status")
+        amount_fields = (
+            "quoted_total",
+            "confirmed_included_amount",
+            "known_excluded_amount",
+            "estimated_total_low",
+            "estimated_total_high",
+        )
+        for field in amount_fields:
+            if field not in cost:
+                errors.append(f"cost_exposure lacks {field}")
+                continue
+            value = cost.get(field)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
+            ):
+                errors.append(f"cost_exposure.{field} must be a non-negative number or null")
+        low = cost.get("estimated_total_low")
+        high = cost.get("estimated_total_high")
+        if isinstance(low, (int, float)) and not isinstance(low, bool) and isinstance(high, (int, float)) and not isinstance(high, bool) and low > high:
+            errors.append("cost_exposure estimated range is reversed")
+        validate_sources(cost.get("source_ids", []), "cost_exposure")
+        unknown_exposures = cost.get("unknown_exposures")
+        if not isinstance(unknown_exposures, list) or any(not isinstance(value, dict) for value in unknown_exposures):
+            errors.append("cost_exposure.unknown_exposures must be an array of objects")
+            unknown_exposures = []
+        for number, exposure in enumerate(unknown_exposures, 1):
+            if not str(exposure.get("description", "")).strip() or not str(exposure.get("reason", "")).strip():
+                errors.append(f"cost exposure unknown item {number} requires description and reason")
+            if not isinstance(exposure.get("blocking"), bool):
+                errors.append(f"cost exposure unknown item {number} requires a blocking flag")
+            validate_sources(exposure.get("source_ids", []), f"cost exposure unknown item {number}")
+        cost_contract_blocked = (
+            cost.get("status") != "verified"
+            or any(exposure.get("blocking") is True for exposure in unknown_exposures)
+            or not isinstance(low, (int, float))
+            or isinstance(low, bool)
+            or not isinstance(high, (int, float))
+            or isinstance(high, bool)
+        )
+
+        contractor_checks = objects("contractor_assessment")
+        for item in contractor_checks:
+            axis_id = str(item.get("axis_id", "")).strip()
+            contractor_axis_ids.append(axis_id)
+            item_status = validate_item(item, f"contractor assessment {axis_id or 'without ID'}")
+            contractor_statuses.append(item_status)
+            required_statuses.append(item_status)
+        if sorted(contractor_axis_ids) != sorted(expected_contractor_axes) or len(contractor_axis_ids) != len(set(contractor_axis_ids)):
+            errors.append("contractor_assessment does not cover every required axis exactly once")
+
+        site_items = objects("site_verification_plan")
+        for item in site_items:
+            verification_id = str(item.get("verification_id", "")).strip()
+            site_verification_ids.append(verification_id)
+            status = str(item.get("status", "")).strip()
+            site_statuses.append(status)
+            if status not in PROPOSAL_CONTRACT["site_verification_statuses"]:
+                errors.append(f"site verification {verification_id or 'without ID'} has an unknown status")
+            for field in ("subject", "method", "responsible_role", "required_before", "consequence_if_unverified"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"site verification {verification_id or 'without ID'} lacks {field}")
+            if status == "completed":
+                validate_sources(item.get("source_ids", []), f"site verification {verification_id}")
+            elif status == "not_applicable":
+                if not str(item.get("rationale", "")).strip() or not str(item.get("applicability_evidence", "")).strip():
+                    errors.append(f"site verification {verification_id} not_applicable without evidence")
+            elif status in {"blocked", "requires_specialist"}:
+                strings(item.get("required_inputs", []), f"site verification {verification_id} required_inputs", allow_empty=False)
+        if not site_items or len(site_verification_ids) != len(set(site_verification_ids)) or any(
+            not value for value in site_verification_ids
+        ):
+            errors.append("site_verification_plan requires unique non-empty items")
+
+        acceptance_items = objects("acceptance_plan")
+        for item in acceptance_items:
+            acceptance_id = str(item.get("acceptance_id", "")).strip()
+            acceptance_plan_ids.append(acceptance_id)
+            for field in ("result", "criterion", "method", "timing", "responsible_party"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"acceptance plan {acceptance_id or 'without ID'} lacks {field}")
+            strings(item.get("evidence_required", []), f"acceptance plan {acceptance_id} evidence_required", allow_empty=False)
+            validate_sources(item.get("source_ids", []), f"acceptance plan {acceptance_id}")
+        if not acceptance_items or len(acceptance_plan_ids) != len(set(acceptance_plan_ids)) or any(
+            not value for value in acceptance_plan_ids
+        ):
+            errors.append("acceptance_plan requires unique non-empty items")
+
+        risks = objects("priority_risks")
+        for item in risks:
+            risk_id = str(item.get("risk_id", "")).strip()
+            priority_risk_ids.append(risk_id)
+            finding_id = str(item.get("finding_id", "")).strip()
+            if not risk_id or not finding_id:
+                errors.append("priority risk requires risk_id and finding_id")
+            if known_findings is not None and finding_id not in known_findings:
+                errors.append(f"priority risk {risk_id or 'without ID'} refers to an unknown Finding")
+            if item.get("urgency") not in PROPOSAL_CONTRACT["risk_urgencies"]:
+                errors.append(f"priority risk {risk_id or 'without ID'} has an unknown urgency")
+            impact_lanes = strings(item.get("impact_lanes", []), f"priority risk {risk_id} impact_lanes", allow_empty=False)
+            if any(value not in PROPOSAL_CONTRACT["risk_impact_lanes"] for value in impact_lanes):
+                errors.append(f"priority risk {risk_id} has an unknown impact lane")
+            for field in ("consequence", "mitigation", "owner_action"):
+                if not str(item.get(field, "")).strip():
+                    errors.append(f"priority risk {risk_id or 'without ID'} lacks {field}")
+            validate_sources(item.get("source_ids", []), f"priority risk {risk_id}")
+        if len(priority_risk_ids) != len(set(priority_risk_ids)) or any(not value for value in priority_risk_ids):
+            errors.append("priority_risks require unique non-empty risk_id values")
+        if not str(review.get("risk_summary", "")).strip():
+            errors.append("risk_summary is required for the current contract")
+
     if not isinstance(manifest, dict):
         errors.append("completion_manifest must be an object")
     else:
-        if manifest.get("contract_version") != PROPOSAL_CONTRACT["contract_version"]:
-            errors.append("completion_manifest has an unknown contract_version")
-        for field, expected in (
+        manifest_fields = [
             ("mandatory_check_ids", mandatory_ids),
             ("discipline_check_keys", discipline_keys),
             ("technical_alternative_track_ids", track_ids),
             ("additional_model_check_ids", additional_ids),
-        ):
+        ]
+        if current_contract:
+            manifest_fields.extend([
+                ("scope_ids", scope_ids),
+                ("constructability_phase_ids", phase_ids),
+                ("contractor_assessment_axis_ids", contractor_axis_ids),
+                ("site_verification_ids", site_verification_ids),
+                ("acceptance_plan_ids", acceptance_plan_ids),
+                ("priority_risk_ids", priority_risk_ids),
+            ])
+        for field, expected in manifest_fields:
             value = manifest.get(field)
             if (
                 not isinstance(value, list)
@@ -334,6 +604,27 @@ def validate_review_contract(
 
     if review.get("status") == "ready_for_owner" and any(status not in ready_statuses for status in required_statuses):
         errors.append("ready review has blocked or specialist-required contract items")
+    if current_contract and review.get("status") == "ready_for_owner":
+        foreman = review.get("foreman_assessment", {})
+        readiness = foreman.get("decision_readiness") if isinstance(foreman, dict) else None
+        if readiness == "preliminary":
+            errors.append("ready review cannot have preliminary decision_readiness")
+        if readiness == "ready_for_contract":
+            if foreman.get("verdict") != "conditionally_recommended":
+                errors.append("ready_for_contract requires a conditionally_recommended foreman verdict")
+            if cost_contract_blocked:
+                errors.append("ready_for_contract has unresolved cost exposure")
+            if any(status not in {"completed", "not_applicable"} for status in site_statuses):
+                errors.append("ready_for_contract has open site verification")
+            if any(status not in ready_statuses for status in contractor_statuses):
+                errors.append("ready_for_contract has incomplete contractor assessment")
+    elif current_contract:
+        foreman = review.get("foreman_assessment", {})
+        if isinstance(foreman, dict) and foreman.get("decision_readiness") in {
+            "ready_for_negotiation",
+            "ready_for_contract",
+        }:
+            errors.append("a non-ready review must keep preliminary decision_readiness")
     return errors
 
 
@@ -370,6 +661,8 @@ def validate_proposal_reviews(
 
     for line_number, review in jsonl_records["proposal_reviews.jsonl"]:
         location = f"proposal_reviews.jsonl:{line_number}"
+        manifest = review.get("completion_manifest")
+        current_contract = isinstance(manifest, dict) and manifest.get("contract_version") == PROPOSAL_CONTRACT["contract_version"]
         status = review.get("status")
         if status not in DIMENSIONS["proposal_review_status"]:
             warnings.append(f"{location}: unknown proposal review status")
@@ -520,6 +813,7 @@ def validate_proposal_reviews(
         if not isinstance(searches, list) or any(not isinstance(value, dict) for value in searches):
             warnings.append(f"{location}: search_runs must be an array of objects")
             searches = []
+        comparable_candidate_ids: set[str] = set()
         for search in searches:
             search_id = str(search.get("search_run_id", "")).strip()
             if not search_id or search.get("status") not in DIMENSIONS["search_run_status"]:
@@ -538,6 +832,54 @@ def validate_proposal_reviews(
             candidates = id_list(search, "candidate_contractor_ids", f"{location}:search {search_id}", warnings)
             if any(value not in jsonl_ids["contractors.jsonl"] for value in candidates):
                 warnings.append(f"{location}: search has an unknown contractor candidate")
+            supplier_candidates = id_list(search, "candidate_supplier_ids", f"{location}:search {search_id}", warnings)
+            if any(value not in jsonl_ids["suppliers.jsonl"] for value in supplier_candidates):
+                warnings.append(f"{location}: search has an unknown supplier candidate")
+            if not current_contract:
+                continue
+            candidate_assessments = search.get("candidate_assessments")
+            if not isinstance(candidate_assessments, list) or any(
+                not isinstance(value, dict) for value in candidate_assessments
+            ):
+                warnings.append(f"{location}: search {search_id or 'without ID'} candidate_assessments must be an array of objects")
+                candidate_assessments = []
+            assessed_ids: list[str] = []
+            for assessment in candidate_assessments:
+                counterparty_id = str(assessment.get("counterparty_id", "")).strip()
+                counterparty_kind = str(assessment.get("counterparty_kind", "")).strip()
+                assessed_ids.append(counterparty_id)
+                if counterparty_kind == "contractor":
+                    if counterparty_id not in candidates:
+                        warnings.append(f"{location}: candidate assessment refers to an unlisted contractor")
+                elif counterparty_kind == "supplier":
+                    if counterparty_id not in supplier_candidates:
+                        warnings.append(f"{location}: candidate assessment refers to an unlisted supplier")
+                else:
+                    warnings.append(f"{location}: candidate assessment has an unknown counterparty_kind")
+                comparability_status = assessment.get("comparability_status")
+                if comparability_status not in PROPOSAL_CONTRACT["candidate_comparability_statuses"]:
+                    warnings.append(f"{location}: candidate assessment has an unknown comparability_status")
+                if not str(assessment.get("basis", "")).strip():
+                    warnings.append(f"{location}: candidate assessment lacks a comparability basis")
+                missing_information = assessment.get("missing_information")
+                if not isinstance(missing_information, list) or any(
+                    not isinstance(value, str) or not value.strip() for value in missing_information
+                ):
+                    warnings.append(f"{location}: candidate assessment has invalid missing_information")
+                assessment_urls = assessment.get("source_urls")
+                if not isinstance(assessment_urls, list) or not assessment_urls or any(
+                    not isinstance(value, str) or not value.strip() for value in assessment_urls
+                ):
+                    warnings.append(f"{location}: candidate assessment requires direct source URLs")
+                if (
+                    search.get("status") in {"complete", "partial"}
+                    and comparability_status in {"potentially_comparable", "requires_quote"}
+                    and counterparty_id
+                ):
+                    comparable_candidate_ids.add(counterparty_id)
+            listed_ids = [*candidates, *supplier_candidates]
+            if sorted(assessed_ids) != sorted(listed_ids) or len(assessed_ids) != len(set(assessed_ids)):
+                warnings.append(f"{location}: every candidate must have exactly one comparability assessment")
 
         findings = id_list(review, "finding_ids", location, warnings)
         if any(value not in jsonl_ids["findings.jsonl"] for value in findings):
@@ -545,8 +887,39 @@ def validate_proposal_reviews(
         alternatives = id_list(review, "alternative_ids", location, warnings)
         if any(value not in jsonl_ids["alternatives.jsonl"] for value in alternatives):
             warnings.append(f"{location}: unknown alternative link")
-        for error in validate_review_contract(review, registered_ids, jsonl_ids["alternatives.jsonl"]):
+        for error in validate_review_contract(
+            review,
+            registered_ids,
+            jsonl_ids["alternatives.jsonl"],
+            jsonl_ids["findings.jsonl"],
+        ):
             warnings.append(f"{location}: {error}")
+        if current_contract:
+            scope_items = review.get("scope_boundary_matrix", [])
+            scoped_quote_items: list[str] = []
+            if isinstance(scope_items, list):
+                for scope_number, scope in enumerate(scope_items, 1):
+                    if not isinstance(scope, dict):
+                        continue
+                    linked_quote_items = id_list(
+                        scope,
+                        "quote_item_ids",
+                        f"{location}:scope {scope_number}",
+                        warnings,
+                    )
+                    linked_requirements = id_list(
+                        scope,
+                        "requirement_ids",
+                        f"{location}:scope {scope_number}",
+                        warnings,
+                    )
+                    if any(value not in current_quote_items for value in linked_quote_items):
+                        warnings.append(f"{location}: scope boundary links an item from another quote")
+                    if any(value not in jsonl_ids["approved_requirements.jsonl"] for value in linked_requirements):
+                        warnings.append(f"{location}: scope boundary links an unknown requirement")
+                    scoped_quote_items.extend(linked_quote_items)
+            if set(scoped_quote_items) != current_quote_items or len(scoped_quote_items) != len(set(scoped_quote_items)):
+                warnings.append(f"{location}: scope boundary must classify every quote item exactly once")
         blockers = id_list(review, "essential_blockers", location, warnings)
         id_list(review, "contractor_questions", location, warnings)
         if status == "ready_for_owner":
@@ -561,6 +934,15 @@ def validate_proposal_reviews(
                 warnings.append(f"{location}: ready review still has incomplete coverage or essential blockers")
             if not searches or not any(search.get("status") in {"complete", "partial"} for search in searches):
                 warnings.append(f"{location}: ready review has no performed external search")
+            if current_contract and quote is not None:
+                contractor_id = str(quote.get("contractor_id", "")).strip()
+                supplier_id = str(quote.get("supplier_id", "")).strip()
+                quoted_counterparty_id = contractor_id or supplier_id
+                distinct_counterparty_found = any(
+                    candidate != quoted_counterparty_id for candidate in comparable_candidate_ids
+                )
+                if not distinct_counterparty_found:
+                    warnings.append(f"{location}: ready review has no distinct comparable contractor or supplier candidate")
 
 
 def document_ok(row: dict[str, str], field: str, active_documents: set[str]) -> bool:

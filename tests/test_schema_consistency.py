@@ -75,20 +75,41 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
         contract = self.proposal_contract
+        self.assertEqual(contract["contract_version"], "1.1")
+        self.assertIn("1.0", contract["legacy_contract_versions"])
         self.assertEqual(
             set(contract["check_statuses"]),
             set(self.ontology["dimensions"]["mandatory_check_status"]),
         )
         self.assertTrue(set(contract["ready_statuses"]).issubset(set(contract["check_statuses"])))
+        self.assertEqual(
+            set(contract["non_waivable_universal_check_ids"]),
+            {value["check_id"] for value in contract["universal_checks"]},
+        )
         for section, field in (
             ("universal_checks", "check_id"),
             ("discipline_axes", "axis_id"),
             ("technical_alternative_tracks", "track_id"),
+            ("constructability_phases", "phase_id"),
+            ("contractor_assessment_axes", "axis_id"),
         ):
             identifiers = [value[field] for value in contract[section]]
             with self.subTest(section=section):
                 self.assertTrue(identifiers)
                 self.assertEqual(len(identifiers), len(set(identifiers)))
+        for contract_field, ontology_dimension in (
+            ("foreman_verdicts", "foreman_verdict"),
+            ("decision_readiness_statuses", "decision_readiness_status"),
+            ("site_verification_statuses", "site_verification_status"),
+            ("candidate_comparability_statuses", "candidate_comparability_status"),
+            ("risk_urgencies", "review_risk_urgency"),
+            ("risk_impact_lanes", "review_risk_impact_lane"),
+        ):
+            with self.subTest(contract_field=contract_field):
+                values = contract[contract_field]
+                self.assertTrue(values)
+                self.assertEqual(len(values), len(set(values)))
+                self.assertEqual(set(values), set(self.ontology["dimensions"][ontology_dimension]))
 
 
 if __name__ == "__main__":

@@ -137,13 +137,29 @@ def write_jsonl(path: Path, *records: dict) -> None:
     )
 
 
-def complete_proposal_contract(disciplines: list[str], source_ids: list[str], alternative_id: str) -> dict:
+def complete_proposal_contract(
+    disciplines: list[str],
+    source_ids: list[str],
+    alternative_ids: list[str],
+    quote_item_ids: list[str],
+    requirement_ids: list[str],
+    finding_ids: list[str],
+) -> dict:
+    def observations(statement: str) -> list[dict]:
+        return [{
+            "statement": statement,
+            "locator": "тестовый источник, строка 1",
+            "verification_status": "verified",
+            "source_ids": source_ids,
+        }]
+
     mandatory = [
         {
             "check_id": definition["check_id"],
             "status": "completed",
             "result": f"Проверено: {definition['title']}",
             "source_ids": source_ids,
+            "observations": observations(f"Подтверждено по пункту {definition['check_id']}"),
         }
         for definition in PROPOSAL_CONTRACT["universal_checks"]
     ]
@@ -154,6 +170,10 @@ def complete_proposal_contract(disciplines: list[str], source_ids: list[str], al
             "status": "completed",
             "result": f"{discipline}: {axis['title']}",
             "source_ids": source_ids,
+            "observations": observations(f"Проверена ось {axis['axis_id']} для {discipline}"),
+            "criteria_checked": ["состав", "стыки", "результат"],
+            "field_risks": [],
+            "required_site_checks": ["контрольный осмотр тестовой зоны"],
         }
         for discipline in disciplines
         for axis in PROPOSAL_CONTRACT["discipline_axes"]
@@ -164,6 +184,7 @@ def complete_proposal_contract(disciplines: list[str], source_ids: list[str], al
             "status": "completed",
             "result": f"Исследован вариант: {track['title']}",
             "source_ids": source_ids,
+            "observations": observations(f"Сопоставлен вариант {track['track_id']}"),
             "alternative_ids": [alternative_id],
             "solution": track["title"],
             "project_fit": "Сопоставлен с требованиями тестового проекта",
@@ -171,8 +192,12 @@ def complete_proposal_contract(disciplines: list[str], source_ids: list[str], al
             "drawbacks": "Зафиксированы ограничения",
             "implementation_impacts": "Проверено влияние на монтаж и смежные системы",
             "lifecycle_cost_notes": "Состав стоимости жизненного цикла обозначен",
+            "performance_basis": "Функция и требуемый результат сопоставлены с AR-1",
+            "cost_basis": "Стоимость сравнивается по одинаковому объёму",
+            "constructability_basis": "Доступ и последовательность монтажа проверены по тестовым данным",
+            "recommendation": "Запросить сопоставимое уточнение до выбора",
         }
-        for track in PROPOSAL_CONTRACT["technical_alternative_tracks"]
+        for track, alternative_id in zip(PROPOSAL_CONTRACT["technical_alternative_tracks"], alternative_ids)
     ]
     additional = [{
         "check_id": "MODEL-1",
@@ -180,18 +205,110 @@ def complete_proposal_contract(disciplines: list[str], source_ids: list[str], al
         "status": "completed",
         "result": "Дополнительных рисков в тестовом примере не выявлено",
         "source_ids": source_ids,
+        "observations": observations("Выполнен открытый поиск дополнительных рисков"),
+    }]
+    scope_rows = [{
+        "scope_id": "SCOPE-1",
+        "result": "Поставка и монтаж светильников выделены в единый тестовый блок",
+        "quote_item_ids": quote_item_ids,
+        "requirement_ids": requirement_ids,
+        "responsibilities": {role: "CTR-1" for role in PROPOSAL_CONTRACT["scope_responsibility_roles"]},
+        "gaps": [],
+        "source_ids": source_ids,
+    }]
+    phases = [{
+        "phase_id": phase["phase_id"],
+        "status": "completed",
+        "result": f"Проверена фаза: {phase['title']}",
+        "source_ids": source_ids,
+        "observations": observations(f"Документально проверена фаза {phase['phase_id']}"),
+        "risks": [],
+        "actions": ["сохранить критерий в договорном приложении"],
+    } for phase in PROPOSAL_CONTRACT["constructability_phases"]]
+    contractor_assessment = [{
+        "axis_id": axis["axis_id"],
+        "status": "completed",
+        "result": f"Проверена ось исполнителя: {axis['title']}",
+        "source_ids": source_ids,
+        "observations": observations(f"Подтверждена ось {axis['axis_id']}"),
+    } for axis in PROPOSAL_CONTRACT["contractor_assessment_axes"]]
+    site_plan = [{
+        "verification_id": "SITE-1",
+        "status": "completed",
+        "subject": "готовность тестовой зоны к монтажу",
+        "method": "визуальный осмотр и контрольный обмер",
+        "responsible_role": "технический заказчик",
+        "required_before": "подписание договора",
+        "consequence_if_unverified": "не подтверждён объём подготовительных работ",
+        "source_ids": source_ids,
+    }]
+    acceptance_plan = [{
+        "acceptance_id": "ACC-1",
+        "result": "два светильника установлены и работоспособны",
+        "criterion": "2 шт., без повреждений, включаются штатным управлением",
+        "method": "пересчёт, осмотр и функциональная проверка",
+        "timing": "до подписания акта",
+        "responsible_party": "владелец или технический заказчик",
+        "evidence_required": ["акт", "фотографии", "результат функциональной проверки"],
+        "source_ids": source_ids,
+    }]
+    priority_risks = [{
+        "risk_id": "RISK-1",
+        "finding_id": finding_ids[0],
+        "urgency": "before_contract",
+        "impact_lanes": ["cost", "quality"],
+        "consequence": "без уточнения гарантии часть результата нельзя сопоставить",
+        "mitigation": "закрепить срок и объём гарантии в договоре",
+        "owner_action": "получить письменное подтверждение подрядчика",
+        "source_ids": source_ids,
     }]
     return {
         "mandatory_checks": mandatory,
         "discipline_checks": discipline_checks,
         "technical_alternative_assessments": technical_alternatives,
         "additional_model_checks": additional,
+        "additional_analysis_summary": "Открытая проверка дополнительных рисков выполнена; новых классов риска не найдено.",
+        "foreman_assessment": {
+            "verdict": "conditionally_recommended",
+            "decision_readiness": "ready_for_contract",
+            "summary": "Тестовое предложение можно рассматривать при закреплении гарантии и критериев приёмки.",
+            "decisive_reasons": ["объём и арифметика сопоставлены", "приёмка измерима"],
+            "conditions_before_contract": ["закрепить гарантию"],
+            "conditions_before_work": ["подтвердить готовность зоны"],
+            "owner_next_actions": ["получить уточнённую редакцию условий"],
+            "source_ids": source_ids,
+        },
+        "scope_boundary_matrix": scope_rows,
+        "constructability_walkthrough": phases,
+        "cost_exposure": {
+            "currency": "RUB",
+            "formula": "quoted_total + known_excluded_amount",
+            "status": "verified",
+            "quoted_total": 2000,
+            "confirmed_included_amount": 2000,
+            "known_excluded_amount": 0,
+            "estimated_total_low": 2000,
+            "estimated_total_high": 2000,
+            "unknown_exposures": [],
+            "source_ids": source_ids,
+        },
+        "contractor_assessment": contractor_assessment,
+        "site_verification_plan": site_plan,
+        "acceptance_plan": acceptance_plan,
+        "priority_risks": priority_risks,
+        "risk_summary": "Один управляемый риск до договора: требуется закрепить гарантию.",
         "completion_manifest": {
             "contract_version": PROPOSAL_CONTRACT["contract_version"],
             "mandatory_check_ids": [value["check_id"] for value in mandatory],
             "discipline_check_keys": [f"{value['discipline']}|{value['axis_id']}" for value in discipline_checks],
             "technical_alternative_track_ids": [value["track_id"] for value in technical_alternatives],
             "additional_model_check_ids": [value["check_id"] for value in additional],
+            "scope_ids": [value["scope_id"] for value in scope_rows],
+            "constructability_phase_ids": [value["phase_id"] for value in phases],
+            "contractor_assessment_axis_ids": [value["axis_id"] for value in contractor_assessment],
+            "site_verification_ids": [value["verification_id"] for value in site_plan],
+            "acceptance_plan_ids": [value["acceptance_id"] for value in acceptance_plan],
+            "priority_risk_ids": [value["risk_id"] for value in priority_risks],
         },
     }
 
@@ -1239,7 +1356,10 @@ class ProjectToolsTest(unittest.TestCase):
                     "coverage": {"expected_units": [1, 2], "checked_units": [1, 2], "gaps": []},
                     "summary_path": ".home-control/summaries/mixed-offer-v1.md",
                 }],
-                "contractors": [{"contractor_id": "CTR-1", "name": "Тестовый кандидат"}],
+                "contractors": [
+                    {"contractor_id": "CTR-1", "name": "Подрядчик из проверяемого КП"},
+                    {"contractor_id": "CTR-2", "name": "Отдельный сопоставимый кандидат"},
+                ],
                 "quotes": [{
                     "quote_id": "Q-1", "contractor_id": "CTR-1",
                     "source_document_id": document["document_id"], "document_version": 1,
@@ -1252,15 +1372,31 @@ class ProjectToolsTest(unittest.TestCase):
                     "approved_requirement_ids": ["AR-1"], "target_entity_ids": [],
                     "proposal_match_status": "exact", "verifiability": "verifiable",
                 }],
-                "findings": [{
-                    "finding_id": "FN-1", "statement": "Арифметика строки подтверждена",
-                    "finding_type": "strength", "severity": "positive", "source_ids": ["QI-1"],
-                }],
-                "alternatives": [{
-                    "alternative_id": "ALT-1", "description": "Запросить сопоставимое предложение второго подрядчика",
-                    "baseline_requirement_ids": ["AR-1"], "checked_at": "2026-08-19",
-                    "source_urls": ["https://example.test/alternative"],
-                }],
+                "findings": [
+                    {
+                        "finding_id": "FN-1", "statement": "В КП не указан срок гарантии",
+                        "finding_type": "scope_gap", "severity": "medium", "source_ids": ["QI-1"],
+                    },
+                    {
+                        "finding_id": "FN-2", "statement": "Арифметика строки подтверждена",
+                        "finding_type": "strength", "severity": "positive", "source_ids": ["QI-1"],
+                    },
+                ],
+                "alternatives": [
+                    {
+                        "alternative_id": alternative_id,
+                        "description": description,
+                        "baseline_requirement_ids": ["AR-1"],
+                        "checked_at": "2026-08-19",
+                        "source_urls": [f"https://example.test/{alternative_id.lower()}"],
+                    }
+                    for alternative_id, description in (
+                        ("ALT-OPT", "Уточнить и улучшить состав решения подрядчика"),
+                        ("ALT-SAME", "Сопоставить решение того же класса"),
+                        ("ALT-DIFF", "Проверить иной технический принцип"),
+                        ("ALT-DEFER", "Сравнить отсрочку и отказ от вмешательства"),
+                    )
+                ],
                 "proposal_reviews": [{
                     "proposal_review_id": "PR-1", "source_document_id": document["document_id"],
                     "document_version": 1, "sha256": document["sha256"], "quote_id": "Q-1",
@@ -1286,13 +1422,29 @@ class ProjectToolsTest(unittest.TestCase):
                         "queries": ["монтаж двух светильников подрядчик тестовый регион"],
                         "checked_at": "2026-08-19", "region": "тестовый регион",
                         "source_urls": ["https://example.test/contractor"],
-                        "candidate_contractor_ids": ["CTR-1"],
+                        "candidate_contractor_ids": ["CTR-2"],
+                        "candidate_supplier_ids": [],
+                        "candidate_assessments": [{
+                            "counterparty_id": "CTR-2",
+                            "counterparty_kind": "contractor",
+                            "comparability_status": "requires_quote",
+                            "basis": "Кандидат выполняет тот же вид работ в тестовом регионе",
+                            "missing_information": ["нужно получить цену по единому заданию"],
+                            "source_urls": ["https://example.test/contractor"],
+                        }],
                         "privacy_review": {"unnecessary_private_data_removed": True},
                     }],
-                    "finding_ids": ["FN-1"], "alternative_ids": ["ALT-1"], "essential_blockers": [],
+                    "finding_ids": ["FN-1", "FN-2"],
+                    "alternative_ids": ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
+                    "essential_blockers": [],
                     "contractor_questions": ["Подтвердите срок гарантии"],
                     **complete_proposal_contract(
-                        ["electrical", "equipment_supply"], ["QI-1", "AR-1"], "ALT-1"
+                        ["electrical", "equipment_supply"],
+                        ["QI-1", "AR-1"],
+                        ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
+                        ["QI-1"],
+                        ["AR-1"],
+                        ["FN-1"],
                     ),
                 }],
             }
@@ -1338,6 +1490,7 @@ class ProjectToolsTest(unittest.TestCase):
                 "status": "requires_specialist",
                 "result": "Полнота чтения требует проверки вложенного чертежа специалистом",
                 "rationale": "Не подтверждена читаемость условных обозначений на одном листе",
+                "required_inputs": ["заключение профильного специалиста"],
             })
             specialist_path = project / "specialist-required-package.json"
             specialist_path.write_text(
@@ -1356,6 +1509,84 @@ class ProjectToolsTest(unittest.TestCase):
             rejected_manifest = run_script(RECORD_PROPOSAL, project, invalid_manifest_path)
             self.assertEqual(rejected_manifest.returncode, 2)
             self.assertIn("completion_manifest.mandatory_check_ids", rejected_manifest.stderr)
+
+            placeholder = json.loads(json.dumps(package))
+            placeholder["proposal_reviews"][0]["mandatory_checks"][0].pop("observations")
+            placeholder_path = project / "placeholder-review-package.json"
+            placeholder_path.write_text(json.dumps(placeholder, ensure_ascii=False), encoding="utf-8")
+            rejected_placeholder = run_script(RECORD_PROPOSAL, project, placeholder_path)
+            self.assertEqual(rejected_placeholder.returncode, 2)
+            self.assertIn("requires evidence observations", rejected_placeholder.stderr)
+
+            waived_universal = json.loads(json.dumps(package))
+            waived_universal["proposal_reviews"][0]["mandatory_checks"][0].update({
+                "status": "not_applicable",
+                "rationale": "тестовая попытка исключить универсальную проверку",
+                "applicability_evidence": "КП существует, поэтому исключение заведомо неверно",
+            })
+            waived_universal_path = project / "waived-universal-package.json"
+            waived_universal_path.write_text(json.dumps(waived_universal, ensure_ascii=False), encoding="utf-8")
+            rejected_waiver = run_script(RECORD_PROPOSAL, project, waived_universal_path)
+            self.assertEqual(rejected_waiver.returncode, 2)
+            self.assertIn("cannot be not_applicable", rejected_waiver.stderr)
+
+            self_candidate = json.loads(json.dumps(package))
+            self_candidate["proposal_reviews"][0]["search_runs"][0]["candidate_contractor_ids"] = ["CTR-1"]
+            self_candidate["proposal_reviews"][0]["search_runs"][0]["candidate_assessments"][0]["counterparty_id"] = "CTR-1"
+            self_candidate_path = project / "self-candidate-package.json"
+            self_candidate_path.write_text(json.dumps(self_candidate, ensure_ascii=False), encoding="utf-8")
+            rejected_self_candidate = run_script(RECORD_PROPOSAL, project, self_candidate_path)
+            self.assertEqual(rejected_self_candidate.returncode, 2)
+            self.assertIn("distinct comparable contractor", rejected_self_candidate.stderr)
+
+            uncovered_scope = json.loads(json.dumps(package))
+            uncovered_scope["proposal_reviews"][0]["scope_boundary_matrix"][0]["quote_item_ids"] = []
+            uncovered_scope_path = project / "uncovered-scope-package.json"
+            uncovered_scope_path.write_text(json.dumps(uncovered_scope, ensure_ascii=False), encoding="utf-8")
+            rejected_scope = run_script(RECORD_PROPOSAL, project, uncovered_scope_path)
+            self.assertEqual(rejected_scope.returncode, 2)
+            self.assertIn("scope boundary", rejected_scope.stderr)
+
+            unresolved_cost = json.loads(json.dumps(package))
+            unresolved_cost["proposal_reviews"][0]["cost_exposure"].update({
+                "status": "partial",
+                "estimated_total_high": None,
+                "unknown_exposures": [{
+                    "description": "стоимость восстановления отделки",
+                    "reason": "нет обследования",
+                    "blocking": True,
+                    "source_ids": ["QI-1"],
+                }],
+            })
+            unresolved_cost_path = project / "unresolved-cost-package.json"
+            unresolved_cost_path.write_text(json.dumps(unresolved_cost, ensure_ascii=False), encoding="utf-8")
+            rejected_cost = run_script(RECORD_PROPOSAL, project, unresolved_cost_path)
+            self.assertEqual(rejected_cost.returncode, 2)
+            self.assertIn("ready_for_contract has unresolved cost exposure", rejected_cost.stderr)
+
+            supplier_package = json.loads(json.dumps(package))
+            supplier_package["contractors"] = []
+            supplier_package["suppliers"] = [
+                {"supplier_id": "SUP-1", "name": "Поставщик из проверяемого КП"},
+                {"supplier_id": "SUP-2", "name": "Отдельный поставщик-кандидат"},
+            ]
+            supplier_package["quotes"][0].pop("contractor_id")
+            supplier_package["quotes"][0]["supplier_id"] = "SUP-1"
+            supplier_search = supplier_package["proposal_reviews"][0]["search_runs"][0]
+            supplier_search["candidate_contractor_ids"] = []
+            supplier_search["candidate_supplier_ids"] = ["SUP-2"]
+            supplier_search["candidate_assessments"][0].update({
+                "counterparty_id": "SUP-2",
+                "counterparty_kind": "supplier",
+                "basis": "Кандидат поставляет сопоставимый предмет в тестовом регионе",
+            })
+            supplier_package["proposal_reviews"][0]["scope_boundary_matrix"][0]["responsibilities"] = {
+                role: "SUP-1" for role in PROPOSAL_CONTRACT["scope_responsibility_roles"]
+            }
+            supplier_path = project / "supplier-proposal-package.json"
+            supplier_path.write_text(json.dumps(supplier_package, ensure_ascii=False), encoding="utf-8")
+            supplier_preview = run_script(RECORD_PROPOSAL, project, supplier_path)
+            self.assertEqual(supplier_preview.returncode, 0, supplier_preview.stderr)
 
             preview = run_script(RECORD_PROPOSAL, project, package_path)
             self.assertEqual(preview.returncode, 0, preview.stderr)
@@ -1379,6 +1610,9 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("## Альтернативные технические решения", dossier_text)
             self.assertIn("different_technical_principle", dossier_text)
             self.assertIn("## Дополнительный анализ модели", dossier_text)
+            self.assertIn("## Прорабский вывод", dossier_text)
+            self.assertIn("## Границы объёма и ответственности", dossier_text)
+            self.assertIn("## Полная денежная экспозиция", dossier_text)
             refused = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
             self.assertEqual(refused.returncode, 2)
             escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")

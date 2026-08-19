@@ -1,7 +1,20 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "1.1",
+  "legacy_contract_versions": ["1.0"],
   "check_statuses": ["completed", "not_applicable", "blocked", "requires_specialist"],
   "ready_statuses": ["completed", "not_applicable"],
+  "foreman_verdicts": [
+    "not_comparable",
+    "return_for_revision",
+    "negotiation_ready",
+    "conditionally_recommended",
+    "not_recommended"
+  ],
+  "decision_readiness_statuses": ["preliminary", "ready_for_negotiation", "ready_for_contract"],
+  "site_verification_statuses": ["completed", "pending", "not_applicable", "blocked", "requires_specialist"],
+  "candidate_comparability_statuses": ["potentially_comparable", "requires_quote", "not_comparable"],
+  "risk_urgencies": ["immediate", "before_contract", "before_work", "before_acceptance", "monitor"],
+  "risk_impact_lanes": ["cost", "schedule", "quality", "safety", "operation", "legal_or_contract"],
   "universal_checks": [
     {"check_id": "source_coverage", "title": "Полное чтение точной версии и покрытие источника"},
     {"check_id": "discipline_identification", "title": "Определение всех затронутых профессиональных направлений"},
@@ -18,6 +31,22 @@
     {"check_id": "market_and_contractor_search", "title": "Актуальные цены, поставщики и альтернативные подрядчики"},
     {"check_id": "recommendation_and_limits", "title": "Итоговая рекомендация, ограничения и нерешённые вопросы"}
   ],
+  "non_waivable_universal_check_ids": [
+    "source_coverage",
+    "discipline_identification",
+    "project_fit",
+    "bidirectional_scope",
+    "quantities_and_arithmetic",
+    "price_and_commercial_terms",
+    "contractor_calculations",
+    "interfaces_and_compatibility",
+    "missing_inputs_and_questions",
+    "execution_and_acceptance",
+    "lifecycle_consequences",
+    "norms_and_specialist_boundary",
+    "market_and_contractor_search",
+    "recommendation_and_limits"
+  ],
   "discipline_axes": [
     {"axis_id": "inputs_and_calculations", "title": "Исходные данные и профильные расчёты"},
     {"axis_id": "scope_and_performance", "title": "Состав и требуемые характеристики результата"},
@@ -31,5 +60,38 @@
     {"track_id": "same_class_alternative", "title": "Альтернативное решение того же технического класса"},
     {"track_id": "different_technical_principle", "title": "Иной технический принцип достижения результата"},
     {"track_id": "continue_repair_defer_or_avoid", "title": "Продолжение эксплуатации, ремонт, отсрочка или отказ от вмешательства"}
+  ],
+  "scope_responsibility_roles": [
+    "design_and_calculations",
+    "measurements_and_site_survey",
+    "supply",
+    "delivery_and_unloading",
+    "storage_and_protection",
+    "preparatory_and_temporary_works",
+    "installation",
+    "interface_works",
+    "testing_and_commissioning",
+    "handover_documentation",
+    "reinstatement_and_finishes",
+    "waste_removal_and_disposal"
+  ],
+  "constructability_phases": [
+    {"phase_id": "site_access", "title": "Доступ, режим объекта и рабочий фронт"},
+    {"phase_id": "delivery_and_unloading", "title": "Доставка, разгрузка, подъём и перемещение"},
+    {"phase_id": "storage_and_protection", "title": "Хранение, укрытие и защита существующего"},
+    {"phase_id": "prerequisites_and_measurements", "title": "Обмеры, основания, закладные и готовность смежников"},
+    {"phase_id": "work_sequence", "title": "Последовательность, временные работы и технологические паузы"},
+    {"phase_id": "interface_coordination", "title": "Стыки подрядчиков, подключения и восстановление"},
+    {"phase_id": "testing_and_commissioning", "title": "Испытания, наладка и устранение замечаний"},
+    {"phase_id": "handover_and_reinstatement", "title": "Документы, обучение, уборка и передача результата"}
+  ],
+  "contractor_assessment_axes": [
+    {"axis_id": "legal_identity", "title": "Идентичность исполнителя, получателя денег и договорной стороны"},
+    {"axis_id": "relevant_experience", "title": "Подтверждённый опыт сопоставимых работ"},
+    {"axis_id": "personnel_and_supervision", "title": "Команда, квалификация и ответственный руководитель"},
+    {"axis_id": "licenses_and_compliance", "title": "Допуски, лицензии, страхование и обязательные документы"},
+    {"axis_id": "capacity_and_schedule", "title": "Текущая загрузка, ресурсы и реалистичность срока"},
+    {"axis_id": "warranty_and_service", "title": "Гарантийная служба, сроки реакции и сервис"},
+    {"axis_id": "references_and_reputation", "title": "Проверяемые рекомендации, споры и репутационные сигналы"}
   ]
 }
