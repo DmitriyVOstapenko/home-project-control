@@ -1,6 +1,6 @@
 {
   "ontology_id": "home-project-control",
-  "schema_version": "8.0",
+  "schema_version": "9.0",
   "dimensions": {
     "statement_kind": [
       "source_fact",
@@ -14,6 +14,7 @@
     ],
     "evidence_origin": [
       "owner_confirmation",
+      "witness_statement",
       "approved_project_document",
       "contractor_proposal",
       "actual_or_acceptance_document",

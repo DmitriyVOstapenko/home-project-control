@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview or create three source-linked Markdown reports for one ProposalReview."""
+"""Preview or create three source-linked Markdown and PDF reports for one ProposalReview."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ MANAGE_SCRIPTS = SCRIPT_DIR.parents[1] / "manage-project-evidence" / "scripts"
 sys.path.insert(0, str(MANAGE_SCRIPTS))
 
 from inspect_project import is_linklike, require_ready_project  # noqa: E402
+from render_report_pdf import require_pdf_dependencies, write_report_pair  # noqa: E402
 
 
 def read_jsonl(path: Path, id_field: str) -> dict[str, dict]:
@@ -206,6 +207,34 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         for value in clarifications
         if isinstance(value, dict) and value.get("status") in {"open", "answered", "closed_not_resolved"}
     ]
+    proposal_data_gaps = [
+        f"{value.get('clarification_id', '')}: {value.get('question', '')} "
+        f"(нужно: {value.get('requested_evidence', '')}; статус: {value.get('status', '')})"
+        for value in clarifications
+        if isinstance(value, dict)
+        and value.get("recipient") in {"contractor", "supplier"}
+        and value.get("status") not in {"verified", "superseded"}
+    ]
+    object_data_gaps = [
+        *context_limitations,
+        *(
+            f"{value.get('clarification_id', '')}: {value.get('question', '')} "
+            f"(адресат: {value.get('recipient', '')}; статус: {value.get('status', '')})"
+            for value in clarifications
+            if isinstance(value, dict)
+            and value.get("recipient") in {"owner", "designer", "specialist"}
+            and value.get("status") not in {"verified", "superseded"}
+        ),
+        *open_site_checks,
+    ]
+    other_data_gaps = [
+        f"{value.get('clarification_id', '')}: {value.get('question', '')} "
+        f"(адресат: {value.get('recipient', '')}; статус: {value.get('status', '')})"
+        for value in clarifications
+        if isinstance(value, dict)
+        and value.get("recipient") == "other"
+        and value.get("status") not in {"verified", "superseded"}
+    ]
     open_context_conflicts = [
         f"{value.get('conflict_id', '')}: {value.get('statement', '')}"
         for value in context_conflicts
@@ -236,6 +265,7 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 - **Нормативная проверка:** {regulatory_summary}.
 - **Контекст объекта:** `{context_mode}`; факт `{as_is_snapshot_id or 'не принят'}`; проект `{baseline_snapshot_id or 'не принят'}`.
 - **Покрытие доказательств:** {evidence_coverage}; базовый режим `{baseline_mode}`; открытых зависимых ограничений: {len(unresolved)}.
+- **Не хватает данных:** в КП — {len(proposal_data_gaps)}; об объекте — {len(object_data_gaps)}; в базовой линии — {len(baseline_limitations)}.
 
 ### Три главных риска
 
@@ -515,6 +545,24 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(baseline_limitations)}
 
+### Карта недостающих данных
+
+**Не хватает в КП или ответе подрядчика:**
+
+{bullets(proposal_data_gaps)}
+
+**Не хватает в данных об объекте или требуется проверка на месте:**
+
+{bullets(object_data_gaps)}
+
+**Не хватает для принятой проектной базы:**
+
+{bullets(baseline_limitations)}
+
+**Иные внешние сведения:**
+
+{bullets(other_data_gaps)}
+
 ### Справочные сопоставления
 
 {bullets(reference_lines)}
@@ -661,7 +709,21 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
 
 {bullets(search_lines)}
 
-## Недостающие данные и вопросы подрядчику
+## Все недостающие данные и адресные запросы
+
+Не хватает в КП или ответе подрядчика:
+
+{bullets(proposal_data_gaps)}
+
+Не хватает в данных об объекте или требуется проверка на месте:
+
+{bullets(object_data_gaps)}
+
+Не хватает для принятой проектной базы:
+
+{bullets(baseline_limitations)}
+
+Все зарегистрированные адресные уточнения:
 
 {bullets(blockers)}
 
@@ -692,16 +754,6 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
     }
 
 
-def write_atomic(path: Path, text: str) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_dir", type=Path)
@@ -719,7 +771,9 @@ def main() -> int:
         raise ValueError("Refusing to overwrite an existing or unsafe proposal report target")
     if is_linklike(proposals_root) or not proposals_root.is_dir():
         raise ValueError("Unsafe proposal report target")
+    require_pdf_dependencies()
     paths = [target / name for name in reports]
+    paths.extend(path.with_suffix(".pdf") for path in list(paths))
     if any(is_linklike(path) for path in paths):
         raise ValueError("Unsafe linked proposal report path")
     result: dict[str, object] = {"mode": "preview", "would_create": [str(path) for path in paths]}
@@ -728,12 +782,12 @@ def main() -> int:
         temporary.mkdir()
         try:
             for name, text in reports.items():
-                write_atomic(temporary / name, text)
+                title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), Path(name).stem)
+                write_report_pair(temporary / name, text, title, replace=False)
             temporary.replace(target)
         finally:
             if temporary.exists():
-                for name in reports:
-                    candidate = temporary / name
+                for candidate in temporary.iterdir():
                     if candidate.is_file() and not is_linklike(candidate):
                         candidate.unlink()
                 temporary.rmdir()
@@ -745,6 +799,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"Proposal dossier failed: {exc}", file=sys.stderr)
         raise SystemExit(2)
