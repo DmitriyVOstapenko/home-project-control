@@ -6,11 +6,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import uuid
 from pathlib import Path
 
 from inspect_project import is_linklike, require_ready_project
 from management_model import REGISTRIES as MANAGEMENT_REGISTRIES, validate_and_enrich
+from render_report_pdf import write_report_pair
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
@@ -428,6 +428,17 @@ def validate_context_layer(
                     valid = False
                 if not valid:
                     warnings.append(f"{location}: completed result path is missing or outside reports")
+            normalized_results = {Path(value).as_posix() for value in result_paths}
+            for value in normalized_results:
+                suffix = Path(value).suffix.lower()
+                if suffix not in {".md", ".pdf"}:
+                    continue
+                paired_suffix = ".pdf" if suffix == ".md" else ".md"
+                paired = Path(value).with_suffix(paired_suffix).as_posix()
+                if paired not in normalized_results:
+                    warnings.append(
+                        f"{location}: completed Markdown/PDF conclusion is missing paired result path {paired}"
+                    )
         if version == 1 and str(request.get("supersedes_analysis_request_id", "")).strip():
             warnings.append(f"{location}: request version 1 must not supersede another revision")
         if isinstance(version, int) and version > 1:
@@ -978,13 +989,31 @@ def validate_fact_records(
                 if any(identifier not in jsonl_ids[registry] for identifier in linked):
                     warnings.append(f"{location}: {field} contains an unknown link")
         source_id = str(record.get("source_document_id", "")).strip()
+        evidence_origin = str(record.get("evidence_origin", "")).strip()
+        if evidence_origin == "witness_statement":
+            if record.get("statement_kind") != "observation":
+                warnings.append(f"{location}: witness statement must use statement_kind observation")
+            for field in ("witness_reference", "reported_at"):
+                if not isinstance(record.get(field), str) or not record[field].strip():
+                    warnings.append(f"{location}: witness statement is missing {field}")
+            corroborating = normalized_string_set(record.get("corroborating_source_ids"))
+            if corroborating is None:
+                warnings.append(f"{location}: corroborating_source_ids must be a unique string array")
+                corroborating = set()
+            known_ids = set(active_documents)
+            for identifiers in jsonl_ids.values():
+                known_ids.update(identifiers)
+            if any(identifier not in known_ids for identifier in corroborating):
+                warnings.append(f"{location}: witness statement has an unknown corroborating source")
+            if record.get("verification_status") == "verified" and not corroborating:
+                warnings.append(f"{location}: verified witness statement has no corroborating source")
         if source_id and source_id not in active_documents:
             warnings.append(f"{location}: source document is not active: {source_id}")
         if source_id:
             version_key = (record.get("document_version"), str(record.get("sha256", "")).strip())
             if version_key not in document_versions.get(source_id, set()):
                 warnings.append(f"{location}: fact is not bound to an exact registered source version")
-        elif record.get("evidence_origin") not in {"owner_confirmation", "agreed_assumption"} and not str(
+        elif evidence_origin not in {"owner_confirmation", "witness_statement", "agreed_assumption"} and not str(
             record.get("source_url", "")
         ).strip():
             warnings.append(f"{location}: fact has no source document, owner basis or external source URL")
@@ -3281,15 +3310,9 @@ def main() -> int:
     output = "\n".join(lines) + "\n"
     if args.write_report:
         report = root / ".home-control" / "reports" / "data-audit.md"
-        report.parent.mkdir(parents=True, exist_ok=True)
-        temporary = report.with_name(f".{report.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            temporary.write_text(output, encoding="utf-8")
-            temporary.replace(report)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-        print(report)
+        markdown, pdf = write_report_pair(report, output, "Проверка данных проекта", replace=True)
+        print(markdown)
+        print(pdf)
     else:
         print(output, end="")
     return 1 if warnings else 0

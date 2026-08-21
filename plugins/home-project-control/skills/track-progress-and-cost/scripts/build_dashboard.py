@@ -7,7 +7,6 @@ import argparse
 import csv
 import json
 import sys
-import uuid
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -18,6 +17,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 MANAGE_SCRIPTS = PLUGIN_ROOT / "skills" / "manage-project-evidence" / "scripts"
 sys.path.insert(0, str(MANAGE_SCRIPTS))
 from inspect_project import require_ready_project  # noqa: E402
+from render_report_pdf import write_report_pair  # noqa: E402
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -221,14 +221,9 @@ def main() -> int:
     reports = control / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     output = reports / "project-status.md"
-    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text("\n".join(lines), encoding="utf-8")
-        temporary.replace(output)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-    print(output)
+    markdown, pdf = write_report_pair(output, "\n".join(lines), "Статус проекта", replace=True)
+    print(markdown)
+    print(pdf)
     return 0
 
 

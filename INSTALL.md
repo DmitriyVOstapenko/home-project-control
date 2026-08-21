@@ -5,6 +5,7 @@
 - актуальная версия ChatGPT desktop app с Codex, Codex CLI с командами `codex plugin` либо Claude Code с командами `claude plugin`;
 - Git для установки из публичного репозитория;
 - Python 3 для локальных проектных утилит.
+- Python-пакеты `reportlab` и `pypdf` для обязательного формирования и проверки PDF-заключений. Если среда не предоставляет их сама, установите: `python -m pip install reportlab pypdf`.
 
 Плагин не требует отдельного MCP-сервера, Node.js, HTML-форм, файла `.cmd`, облачного диска или API-ключа.
 

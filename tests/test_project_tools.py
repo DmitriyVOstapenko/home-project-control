@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pypdf import PdfReader
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "manage-project-evidence" / "scripts"
@@ -22,6 +24,7 @@ INVENTORY = SCRIPT_ROOT / "inventory_document.py"
 RECORD_BASELINE = SCRIPT_ROOT / "record_baseline_snapshot.py"
 RECORD_ANALYSIS = SCRIPT_ROOT / "record_analysis_cycle.py"
 BUILD_CONTEXT = SCRIPT_ROOT / "build_project_context.py"
+RENDER_REPORT = SCRIPT_ROOT / "render_report_pdf.py"
 PROPOSAL_SCRIPT_ROOT = REPO_ROOT / "plugins" / "home-project-control" / "skills" / "review-contractor-proposal" / "scripts"
 RECORD_PROPOSAL = PROPOSAL_SCRIPT_ROOT / "record_proposal_review.py"
 BUILD_DOSSIER = PROPOSAL_SCRIPT_ROOT / "build_proposal_dossier.py"
@@ -50,6 +53,14 @@ def run_script(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
         text=True,
         encoding="utf-8",
     )
+
+
+def assert_readable_pdf(test: unittest.TestCase, path: Path, expected_text: str) -> None:
+    test.assertTrue(path.is_file(), f"missing PDF: {path}")
+    reader = PdfReader(str(path))
+    test.assertGreaterEqual(len(reader.pages), 1)
+    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+    test.assertIn(expected_text, extracted)
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -691,6 +702,11 @@ class ProjectToolsTest(unittest.TestCase):
             audited = run_script(AUDIT, project)
             self.assertEqual(audited.returncode, 1, audited.stderr)
             self.assertIn("duplicate document_id duplicate-document", audited.stdout)
+            written = run_script(AUDIT, project, "--write-report")
+            self.assertEqual(written.returncode, 1, written.stderr)
+            reports = project / ".home-control" / "reports"
+            self.assertTrue((reports / "data-audit.md").is_file())
+            assert_readable_pdf(self, reports / "data-audit.pdf", "Проверка данных проекта")
 
     def test_analysis_cycle_package_previews_validates_and_appends_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -751,6 +767,72 @@ class ProjectToolsTest(unittest.TestCase):
             rejected = run_script(RECORD_ANALYSIS, project, invalid_path)
             self.assertEqual(rejected.returncode, 2)
             self.assertIn("missing required field locator", rejected.stderr)
+
+    def test_witness_statement_requires_identity_time_and_independent_corroboration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            witness = {
+                "fact_id": "F-WITNESS-1",
+                "statement": "По словам бывшего прораба, труба проходит за северной стеной",
+                "statement_kind": "observation",
+                "evidence_origin": "witness_statement",
+                "verification_status": "requires_confirmation",
+                "locator": "Разговор 2026-08-21, ответ на вопрос 3",
+                "witness_reference": "бывший прораб объекта",
+                "reported_at": "2026-08-21",
+                "corroborating_source_ids": [],
+                "recorded_at": "2026-08-21",
+                "discipline_ids": ["water"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            package_path = project / "witness.json"
+            package_path.write_text(
+                json.dumps({"schema_version": "1.0", "facts": [witness]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            applied = run_script(RECORD_ANALYSIS, project, package_path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+
+            invalid = dict(witness)
+            invalid["fact_id"] = "F-WITNESS-2"
+            invalid["verification_status"] = "verified"
+            invalid_path = project / "invalid-witness.json"
+            invalid_path.write_text(
+                json.dumps({"schema_version": "1.0", "facts": [invalid]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            rejected = run_script(RECORD_ANALYSIS, project, invalid_path, "--apply")
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("verified witness statement has no corroborating source", rejected.stderr)
+            self.assertNotIn("F-WITNESS-2", (project / ".home-control" / "facts.jsonl").read_text(encoding="utf-8"))
+
+    def test_report_renderer_previews_and_creates_markdown_pdf_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            source = project / "sample-report.md"
+            source.write_text(
+                "# Заключение по дому\n\n## Вывод\n\n- Проверен факт.\n- Нужен обмер.\n",
+                encoding="utf-8",
+            )
+            target = Path("decisions") / "sample-report.md"
+            preview = run_script(RENDER_REPORT, project, source, "--target", target)
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            report_dir = project / ".home-control" / "reports" / "decisions"
+            self.assertFalse(report_dir.exists())
+
+            applied = run_script(RENDER_REPORT, project, source, "--target", target, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(
+                (report_dir / "sample-report.md").read_text(encoding="utf-8"),
+                source.read_text(encoding="utf-8"),
+            )
+            assert_readable_pdf(self, report_dir / "sample-report.pdf", "Заключение по дому")
 
     def test_as_is_snapshot_analysis_request_and_context_card_are_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -862,6 +944,11 @@ class ProjectToolsTest(unittest.TestCase):
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("Карточка объекта и продолжения работы", report_text)
             self.assertEqual(report_text, card_preview.stdout)
+            assert_readable_pdf(
+                self,
+                project / ".home-control" / "reports" / "project-context.pdf",
+                "Карточка объекта",
+            )
 
     def test_as_is_snapshot_rejects_document_without_complete_reading_and_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3158,7 +3245,14 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertEqual(created.returncode, 0, created.stderr)
             self.assertEqual(
                 {path.name for path in target.iterdir()},
-                {"owner-card.md", "contractor-request.md", "full-dossier.md"},
+                {
+                    "owner-card.md",
+                    "owner-card.pdf",
+                    "contractor-request.md",
+                    "contractor-request.pdf",
+                    "full-dossier.md",
+                    "full-dossier.pdf",
+                },
             )
             dossier_text = (target / "full-dossier.md").read_text(encoding="utf-8")
             owner_text = (target / "owner-card.md").read_text(encoding="utf-8")
@@ -3182,6 +3276,12 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("## Сопоставимость проверенных цен", dossier_text)
             self.assertIn("## Стоимость и календарь вариантов", dossier_text)
             self.assertIn("## Оппонирующий проход", dossier_text)
+            self.assertIn("## Все недостающие данные и адресные запросы", dossier_text)
+            self.assertIn("Не хватает в КП или ответе подрядчика", dossier_text)
+            self.assertIn("Не хватает в данных об объекте", dossier_text)
+            assert_readable_pdf(self, target / "owner-card.pdf", "Карточка решения")
+            assert_readable_pdf(self, target / "contractor-request.pdf", "Запрос подрядчику")
+            assert_readable_pdf(self, target / "full-dossier.pdf", "Полное досье")
             refused = run_script(BUILD_DOSSIER, project, "PR-1", "--apply")
             self.assertEqual(refused.returncode, 2)
             escaped = run_script(BUILD_DOSSIER, project, "../escape", "--apply")
@@ -3346,6 +3446,7 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("Управленческая база и прогноз", report)
             self.assertIn("Текущий бюджет: 350.00 RUB", report)
             self.assertIn("Прогноз итоговой стоимости: 290.00 RUB", report)
+            assert_readable_pdf(self, control / "reports" / "project-status.pdf", "Состояние проекта")
             duplicate = run_script(MANAGEMENT, project, package_path, "--apply")
             self.assertEqual(duplicate.returncode, 2)
             self.assertIn("append-only", duplicate.stderr)

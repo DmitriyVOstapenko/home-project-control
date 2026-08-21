@@ -6,11 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import uuid
 from pathlib import Path
 
 from audit_project import complete_coverage_is_valid, normalized_unit_set
 from inspect_project import is_linklike, require_ready_project
+from render_report_pdf import require_pdf_dependencies, write_report_pair
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -323,18 +323,6 @@ def build_card(root: Path) -> str:
     return "\n".join(lines)
 
 
-def write_atomic(path: Path, content: str) -> None:
-    if is_linklike(path) or (path.exists() and not path.is_file()):
-        raise ValueError("Unsafe project-context report path")
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_dir", type=Path)
@@ -342,10 +330,11 @@ def main() -> int:
     args = parser.parse_args()
     root = require_ready_project(args.project_dir)
     card = build_card(root)
+    require_pdf_dependencies()
     if args.apply:
         target = root / ".home-control" / "reports" / "project-context.md"
-        write_atomic(target, card)
-        print(json.dumps({"mode": "applied", "report": str(target)}, ensure_ascii=False, indent=2))
+        markdown, pdf = write_report_pair(target, card, "Карточка проекта", replace=True)
+        print(json.dumps({"mode": "applied", "reports": [str(markdown), str(pdf)]}, ensure_ascii=False, indent=2))
     else:
         sys.stdout.write(card)
     return 0
