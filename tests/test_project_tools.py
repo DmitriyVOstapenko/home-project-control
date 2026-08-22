@@ -811,6 +811,108 @@ class ProjectToolsTest(unittest.TestCase):
             self.assertIn("verified witness statement has no corroborating source", rejected.stderr)
             self.assertNotIn("F-WITNESS-2", (project / ".home-control" / "facts.jsonl").read_text(encoding="utf-8"))
 
+    def test_fact_conflict_resolution_preserves_history_and_updates_current_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            self.assertEqual(run_script(INIT, project).returncode, 0)
+            common = {
+                "statement_kind": "observation",
+                "evidence_origin": "owner_confirmation",
+                "locator": "сообщение владельца в тестовой задаче",
+                "recorded_at": "2026-08-22",
+                "discipline_ids": ["electrical"],
+                "package_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "system_ids": [],
+            }
+            old_fact = {
+                **common,
+                "fact_id": "F-OLD",
+                "statement": "Вводной автомат имеет номинал 32 А",
+                "verification_status": "requires_confirmation",
+            }
+            conflicting_fact = {
+                **common,
+                "fact_id": "F-CONFLICT",
+                "statement": "Вводной автомат имеет номинал 40 А",
+                "verification_status": "conflicted",
+                "conflicts_with_fact_ids": ["F-OLD"],
+            }
+            resolution_decision = {
+                "decision_id": "D-FACT-RESOLVE",
+                "decision_type": "fact_conflict_resolution",
+                "decision": "Использовать 40 А как рабочее значение до инструментальной проверки",
+                "status": "approved",
+                "approved_by": "owner",
+                "approved_at": "2026-08-22",
+                "source_fact_ids": ["F-OLD", "F-CONFLICT"],
+            }
+            resolved_fact = {
+                **common,
+                "fact_id": "F-CURRENT",
+                "statement": "Рабочее значение номинала вводного автомата — 40 А до проверки на объекте",
+                "verification_status": "requires_confirmation",
+                "supersedes_fact_ids": ["F-OLD", "F-CONFLICT"],
+                "update_kind": "replaces",
+                "update_reason": "Владелец выбрал рабочую версию из двух противоречащих сообщений",
+                "conflict_resolution_decision_id": "D-FACT-RESOLVE",
+            }
+            snapshot_decision = {
+                "decision_id": "D-ASIS-CURRENT",
+                "decision_type": "as_is_snapshot_acceptance",
+                "decision": "Использовать обновлённое рабочее состояние для зависимого анализа",
+                "status": "approved",
+                "approved_by": "owner",
+                "approved_at": "2026-08-22",
+                "source_fact_ids": ["F-CURRENT"],
+            }
+            snapshot = {
+                "as_is_snapshot_id": "AIS-CURRENT",
+                "snapshot_version": 1,
+                "scope": "Электроснабжение объекта",
+                "captured_at": "2026-08-22",
+                "owner_decision_id": "D-ASIS-CURRENT",
+                "supersedes_as_is_snapshot_id": "",
+                "document_versions": [],
+                "source_fact_ids": ["F-CURRENT"],
+                "information_gap_ids": [],
+                "site_ids": [],
+                "zone_ids": [],
+                "physical_element_ids": [],
+                "system_ids": [],
+                "asset_ids": [],
+                "route_ids": [],
+                "asset_event_ids": [],
+                "condition_assessment_ids": [],
+                "limitations": ["Номинал 40 А выбран владельцем как рабочий и требует проверки на объекте"],
+            }
+            package = {
+                "schema_version": "1.0",
+                "facts": [old_fact, conflicting_fact, resolved_fact],
+                "decisions": [resolution_decision, snapshot_decision],
+                "as_is_snapshots": [snapshot],
+            }
+            path = project / "fact-conflict-resolution.json"
+            path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+            applied = run_script(RECORD_ANALYSIS, project, path, "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(run_script(AUDIT, project).returncode, 0)
+            facts_text = (project / ".home-control" / "facts.jsonl").read_text(encoding="utf-8")
+            self.assertIn("F-OLD", facts_text)
+            self.assertIn("F-CONFLICT", facts_text)
+            self.assertIn("F-CURRENT", facts_text)
+
+            invalid = json.loads(json.dumps(package))
+            invalid["facts"] = [{**resolved_fact, "fact_id": "F-CYCLE", "supersedes_fact_ids": ["F-CYCLE"]}]
+            invalid["decisions"] = []
+            invalid["as_is_snapshots"] = []
+            invalid_path = project / "invalid-fact-cycle.json"
+            invalid_path.write_text(json.dumps(invalid, ensure_ascii=False), encoding="utf-8")
+            rejected = run_script(RECORD_ANALYSIS, project, invalid_path)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("cannot supersede itself", rejected.stderr)
+
     def test_report_renderer_previews_and_creates_markdown_pdf_pair(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary) / "project"
@@ -2561,7 +2663,7 @@ class ProjectToolsTest(unittest.TestCase):
                 "statement": "В тестовой зоне подтверждён существующий источник питания для двух светильников",
                 "statement_kind": "source_fact",
                 "evidence_origin": "owner_confirmation",
-                "verification_status": "verified",
+                "verification_status": "requires_confirmation",
                 "locator": "подтверждение владельца от 2026-08-19",
                 "recorded_at": "2026-08-19",
                 "discipline_ids": ["electrical"],
@@ -2773,6 +2875,12 @@ class ProjectToolsTest(unittest.TestCase):
                     "as_is_fact_matches": [{
                         "fact_id": "F-ASIS-PROP",
                         "status": "applied",
+                        "verification_status": "requires_confirmation",
+                        "decision_treatment": "risk_signal",
+                        "decision_impact": "Источник питания ограничивает допустимую нагрузку и состав монтажных работ.",
+                        "confirmation_action": "Измерить доступную мощность и проверить защитный аппарат до договора.",
+                        "if_confirmed": "Оставить предложенный состав при подтверждении достаточной мощности.",
+                        "if_refuted": "Пересчитать нагрузку и включить изменение питания в объём и стоимость.",
                         "quote_item_ids": ["QI-1"],
                         "alternative_ids": ["ALT-OPT", "ALT-SAME", "ALT-DIFF", "ALT-DEFER"],
                         "notes": "Каждый вариант проверяется с учётом существующего источника питания.",
@@ -3041,6 +3149,28 @@ class ProjectToolsTest(unittest.TestCase):
             rejected_as_is = run_script(RECORD_PROPOSAL, project, incomplete_as_is_path)
             self.assertEqual(rejected_as_is.returncode, 2)
             self.assertIn("classify every fact", rejected_as_is.stderr)
+
+            missing_fact_impact = json.loads(json.dumps(package))
+            missing_fact_impact["proposal_reviews"][0]["as_is_fact_matches"][0]["decision_impact"] = ""
+            missing_fact_impact_path = project / "missing-fact-impact.json"
+            missing_fact_impact_path.write_text(
+                json.dumps(missing_fact_impact, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_fact_impact = run_script(RECORD_PROPOSAL, project, missing_fact_impact_path)
+            self.assertEqual(rejected_fact_impact.returncode, 2)
+            self.assertIn("decision_impact", rejected_fact_impact.stderr)
+
+            wrong_fact_status = json.loads(json.dumps(package))
+            wrong_fact_status["proposal_reviews"][0]["as_is_fact_matches"][0][
+                "verification_status"
+            ] = "verified"
+            wrong_fact_status_path = project / "wrong-fact-status.json"
+            wrong_fact_status_path.write_text(
+                json.dumps(wrong_fact_status, ensure_ascii=False), encoding="utf-8"
+            )
+            rejected_fact_status = run_script(RECORD_PROPOSAL, project, wrong_fact_status_path)
+            self.assertEqual(rejected_fact_status.returncode, 2)
+            self.assertIn("preserve the source verification_status", rejected_fact_status.stderr)
 
             incomplete_baseline_scope = json.loads(json.dumps(package))
             incomplete_baseline_scope["proposal_reviews"][0]["baseline_scope_classifications"] = [

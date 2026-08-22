@@ -369,7 +369,13 @@ def build_reports(root: Path, review_id: str) -> dict[str, str]:
         if isinstance(value, dict)
     ]
     as_is_match_lines = [
-        f"`{value.get('fact_id', '')}` [{value.get('status', '')}]: {value.get('notes', '')}; "
+        f"`{value.get('fact_id', '')}` [связь: {value.get('status', '')}; "
+        f"достоверность: {value.get('verification_status', 'не указана')}; "
+        f"учёт: {value.get('decision_treatment', 'не указан')}]: {value.get('notes', '')}; "
+        f"влияние на решение: {value.get('decision_impact', 'не указано')}; "
+        f"проверка: {value.get('confirmation_action', 'не требуется')}; "
+        f"если подтвердится: {value.get('if_confirmed', 'не указано')}; "
+        f"если не подтвердится: {value.get('if_refuted', 'не указано')}; "
         f"строки КП: {', '.join(value.get('quote_item_ids', [])) or 'нет'}; "
         f"варианты: {', '.join(value.get('alternative_ids', [])) or 'нет'}"
         for value in as_is_matches

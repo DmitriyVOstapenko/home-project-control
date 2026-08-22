@@ -824,6 +824,10 @@ def validate_package(root: Path, package: dict) -> tuple[dict[str, list[dict]], 
             registered_ids,
             set(known["alternatives"]),
             set(known["findings"]),
+            {
+                fact_id: str(fact.get("verification_status", "")).strip()
+                for fact_id, fact in known["facts"].items()
+            },
         )
         if contract_errors:
             raise ValueError(f"ProposalReview {review_id} contract failed: " + "; ".join(contract_errors))

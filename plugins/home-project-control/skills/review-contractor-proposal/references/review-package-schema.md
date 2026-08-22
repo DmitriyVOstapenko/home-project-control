@@ -32,7 +32,7 @@
   "target_entity_ids": ["SYS-0001"],
   "context_limitations": [],
   "as_is_fact_matches": [
-    {"fact_id": "F-0001", "status": "supports", "quote_item_ids": ["QI-0001"], "target_entity_ids": ["SYS-0001"], "notes": "...", "source_ids": ["F-0001", "QI-0001"]}
+    {"fact_id": "F-0001", "status": "applied", "verification_status": "requires_confirmation", "decision_treatment": "risk_signal", "decision_impact": "...", "confirmation_action": "...", "if_confirmed": "...", "if_refuted": "...", "quote_item_ids": ["QI-0001"], "target_entity_ids": ["SYS-0001"], "notes": "...", "source_ids": ["F-0001", "QI-0001"]}
   ],
   "context_conflicts": [],
   "baseline_assessment_mode": "accepted_baseline",
@@ -91,7 +91,7 @@
 ## Обязательные слои
 
 - `ProposalReview` неизменяем: первая запись имеет ревизию `1`, следующая запись той же серии ссылается на непосредственно предшествующую.
-- `context_mode` обязателен. Для режима с фактическим состоянием указываются текущий `as_is_snapshot_id`, затрагиваемые сущности и классификация каждого исходного факта снимка. Для режима с принятой базой указываются текущий `baseline_snapshot_id`, точная область, классификация каждого требования снимка и непустое подмножество применимых `baseline_requirement_ids`.
+- `context_mode` обязателен. Для режима с фактическим состоянием указываются текущий `as_is_snapshot_id`, затрагиваемые сущности и классификация каждого исходного факта снимка. В каждой записи `as_is_fact_matches` точный статус достоверности переносится из `Fact`, способ учёта выбирается из `constraint`, `risk_signal`, `scenario_input`, `monitor`, `not_applicable`, а влияние на вывод описывается явно. Для конфликтующего или требующего подтверждения факта обязательны проверка и последствия подтверждения и опровержения. Для режима с принятой базой указываются текущий `baseline_snapshot_id`, точная область, классификация каждого требования снимка и непустое подмножество применимых `baseline_requirement_ids`.
 - `context_conflicts` отдельно хранит противоречия факта, проекта и предложения; открытый блокирующий конфликт не допускает договорную готовность.
 - В `reference_only` поля снимка, `baseline_requirement_ids`, `requirement_matches` и связи `QuoteItem.approved_requirement_ids` пусты. `reference_comparisons` хранит точную версию полностью прочитанного документа, роль, область, формулировку, локатор, статус, строки КП и ограничения.
 - В `no_relevant_documents` и базовая матрица, и `reference_comparisons` пусты. В обоих режимах без базы `baseline_limitations` явно перечисляет зависимые выводы, которые нельзя сделать. Эти ограничения не переносятся в `essential_blockers`, если не мешают независимой проверке.

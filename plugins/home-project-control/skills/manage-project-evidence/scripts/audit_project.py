@@ -300,8 +300,20 @@ def validate_context_layer(
             warnings.append(f"{location}: missing or unknown source_fact_ids")
         for fact_id in source_fact_ids:
             fact = facts_by_id.get(fact_id)
-            if fact is not None and fact.get("verification_status") in {"unreviewed", "extracted"}:
+            if fact is not None and fact.get("verification_status") in {
+                "unreviewed", "extracted", "rejected", "superseded"
+            }:
                 warnings.append(f"{location}: source fact {fact_id} is not ready for an as-is snapshot")
+        superseded_inside_snapshot = {
+            prior_id
+            for fact_id in source_fact_ids
+            for prior_id in (
+                normalized_string_set(facts_by_id.get(fact_id, {}).get("supersedes_fact_ids", [])) or set()
+            )
+            if prior_id in source_fact_ids
+        }
+        if superseded_inside_snapshot:
+            warnings.append(f"{location}: snapshot contains both a fact update and the fact it supersedes")
         for field, known in entity_fields.items():
             if not isinstance(snapshot.get(field), list):
                 warnings.append(f"{location}: {field} must be an array")
@@ -962,6 +974,9 @@ def validate_fact_records(
     document_versions: dict[str, set[tuple[object, str]]],
     warnings: list[str],
 ) -> None:
+    facts_by_id = records_by_id(jsonl_records["facts.jsonl"], "fact_id")
+    decisions_by_id = records_by_id(jsonl_records["decisions.jsonl"], "decision_id")
+    update_graph: dict[str, set[str]] = {}
     for line_number, record in jsonl_records["facts.jsonl"]:
         location = f"facts.jsonl:{line_number}"
         for field in ("statement_kind", "evidence_origin", "verification_status"):
@@ -973,6 +988,52 @@ def validate_fact_records(
         for field in ("statement", "locator", "recorded_at"):
             if not isinstance(record.get(field), str) or not record[field].strip():
                 warnings.append(f"{location}: missing required field {field}")
+        fact_id = str(record.get("fact_id", "")).strip()
+        supersedes = normalized_string_set(record.get("supersedes_fact_ids", []))
+        if supersedes is None:
+            warnings.append(f"{location}: supersedes_fact_ids must be a unique string array")
+            supersedes = set()
+        update_kind = str(record.get("update_kind", "")).strip()
+        update_reason = str(record.get("update_reason", "")).strip()
+        if supersedes:
+            if fact_id in supersedes:
+                warnings.append(f"{location}: a fact cannot supersede itself")
+            if any(value not in facts_by_id for value in supersedes):
+                warnings.append(f"{location}: supersedes_fact_ids contains an unknown fact")
+            if update_kind not in DIMENSIONS["fact_update_kind"]:
+                warnings.append(f"{location}: linked fact update requires a known update_kind")
+            if not update_reason:
+                warnings.append(f"{location}: linked fact update requires update_reason")
+        elif update_kind or update_reason:
+            warnings.append(f"{location}: update_kind and update_reason require supersedes_fact_ids")
+        if fact_id:
+            update_graph[fact_id] = set(supersedes)
+        conflicts = normalized_string_set(record.get("conflicts_with_fact_ids", []))
+        if conflicts is None:
+            warnings.append(f"{location}: conflicts_with_fact_ids must be a unique string array")
+            conflicts = set()
+        if fact_id in conflicts:
+            warnings.append(f"{location}: a fact cannot conflict with itself")
+        if any(value not in facts_by_id for value in conflicts):
+            warnings.append(f"{location}: conflicts_with_fact_ids contains an unknown fact")
+        if conflicts and record.get("verification_status") != "conflicted":
+            warnings.append(f"{location}: an unresolved fact conflict requires verification_status conflicted")
+        resolution_decision_id = str(record.get("conflict_resolution_decision_id", "")).strip()
+        if resolution_decision_id:
+            decision = decisions_by_id.get(resolution_decision_id)
+            if (
+                decision is None
+                or decision.get("decision_type") != "fact_conflict_resolution"
+                or decision.get("status") != "approved"
+                or decision.get("approved_by") != "owner"
+            ):
+                warnings.append(f"{location}: conflict_resolution_decision_id is not an approved owner resolution")
+            elif not supersedes.issubset(
+                normalized_string_set(decision.get("source_fact_ids", [])) or set()
+            ):
+                warnings.append(f"{location}: owner conflict resolution does not cite every superseded fact")
+            if not supersedes:
+                warnings.append(f"{location}: a conflict resolution fact must supersede the resolved fact records")
         disciplines = normalized_string_set(record.get("discipline_ids"))
         if disciplines is None:
             warnings.append(f"{location}: discipline_ids must be a unique string array")
@@ -1018,12 +1079,30 @@ def validate_fact_records(
         ).strip():
             warnings.append(f"{location}: fact has no source document, owner basis or external source URL")
 
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(fact_id: str) -> bool:
+        if fact_id in visiting:
+            return True
+        if fact_id in visited:
+            return False
+        visiting.add(fact_id)
+        has_cycle = any(prior in update_graph and visit(prior) for prior in update_graph.get(fact_id, set()))
+        visiting.remove(fact_id)
+        visited.add(fact_id)
+        return has_cycle
+
+    if any(visit(fact_id) for fact_id in update_graph):
+        warnings.append("facts.jsonl: supersedes_fact_ids contains a cycle")
+
 
 def validate_review_contract(
     review: dict,
     registered_ids: set[str],
     known_alternatives: set[str],
     known_findings: set[str] | None = None,
+    fact_verification_statuses: dict[str, str] | None = None,
 ) -> list[str]:
     """Return machine-checkable contract errors for one ProposalReview."""
     errors: list[str] = []
@@ -1468,6 +1547,30 @@ def validate_review_contract(
             if not str(item.get("notes", "")).strip():
                 errors.append(f"as-is fact match {fact_id or 'without ID'} lacks notes")
             validate_sources(item.get("source_ids", []), f"as-is fact match {fact_id or 'without ID'}")
+            if current_contract:
+                verification_status = str(item.get("verification_status", "")).strip()
+                if verification_status not in verification_statuses:
+                    errors.append(
+                        f"as-is fact match {fact_id or 'without ID'} has an unknown verification_status"
+                    )
+                elif fact_verification_statuses is not None and verification_status != fact_verification_statuses.get(
+                    fact_id
+                ):
+                    errors.append(
+                        f"as-is fact match {fact_id or 'without ID'} does not preserve the source verification_status"
+                    )
+                if item.get("decision_treatment") not in PROPOSAL_CONTRACT["fact_decision_treatments"]:
+                    errors.append(
+                        f"as-is fact match {fact_id or 'without ID'} has an unknown decision_treatment"
+                    )
+                if not str(item.get("decision_impact", "")).strip():
+                    errors.append(f"as-is fact match {fact_id or 'without ID'} lacks decision_impact")
+                if verification_status in {"conflicted", "requires_confirmation"}:
+                    for field in ("confirmation_action", "if_confirmed", "if_refuted"):
+                        if not str(item.get(field, "")).strip():
+                            errors.append(
+                                f"as-is fact match {fact_id or 'without ID'} lacks {field} for an uncertain fact"
+                            )
         if len(as_is_match_fact_ids) != len(set(as_is_match_fact_ids)) or any(not value for value in as_is_match_fact_ids):
             errors.append("as_is_fact_matches require unique non-empty fact IDs")
 
@@ -1932,6 +2035,7 @@ def validate_proposal_reviews(
     inventories = records_by_id(jsonl_records["document_inventories.jsonl"], "inventory_id")
     reading_runs = records_by_id(jsonl_records["reading_runs.jsonl"], "reading_run_id")
     extraction_runs = records_by_id(jsonl_records["fact_extraction_runs.jsonl"], "extraction_run_id")
+    facts = records_by_id(jsonl_records["facts.jsonl"], "fact_id")
     quotes = records_by_id(jsonl_records["quotes.jsonl"], "quote_id")
     quote_items = records_by_id(jsonl_records["quote_items.jsonl"], "quote_item_id")
     baseline_snapshots = records_by_id(jsonl_records["baseline_snapshots.jsonl"], "baseline_snapshot_id")
@@ -2334,6 +2438,17 @@ def validate_proposal_reviews(
                     ]
                     if sorted(matched_fact_ids) != sorted(snapshot_fact_ids):
                         warnings.append(f"{location}: every AsIsSnapshot fact must be classified exactly once")
+                    for match in as_is_matches if isinstance(as_is_matches, list) else []:
+                        if not isinstance(match, dict):
+                            continue
+                        fact_id = str(match.get("fact_id", "")).strip()
+                        source_fact = facts.get(fact_id)
+                        if source_fact is not None and match.get("verification_status") != source_fact.get(
+                            "verification_status"
+                        ):
+                            warnings.append(
+                                f"{location}: as-is fact match {fact_id} does not preserve the source verification_status"
+                            )
                     snapshot_entity_ids: set[str] = set()
                     for field in (
                         "site_ids", "zone_ids", "physical_element_ids", "system_ids", "asset_ids", "route_ids",
@@ -2441,6 +2556,10 @@ def validate_proposal_reviews(
             registered_ids,
             jsonl_ids["alternatives.jsonl"],
             jsonl_ids["findings.jsonl"],
+            {
+                fact_id: str(fact.get("verification_status", "")).strip()
+                for fact_id, fact in facts.items()
+            },
         ):
             warnings.append(f"{location}: {error}")
         if current_contract:

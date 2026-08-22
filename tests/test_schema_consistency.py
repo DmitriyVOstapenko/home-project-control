@@ -109,12 +109,13 @@ class SchemaConsistencyTests(unittest.TestCase):
 
     def test_proposal_review_contract_is_unique_and_matches_ontology(self) -> None:
         contract = self.proposal_contract
-        self.assertEqual(contract["contract_version"], "1.5")
+        self.assertEqual(contract["contract_version"], "1.6")
         self.assertIn("1.0", contract["legacy_contract_versions"])
         self.assertIn("1.1", contract["legacy_contract_versions"])
         self.assertIn("1.2", contract["legacy_contract_versions"])
         self.assertIn("1.3", contract["legacy_contract_versions"])
         self.assertIn("1.4", contract["legacy_contract_versions"])
+        self.assertIn("1.5", contract["legacy_contract_versions"])
         self.assertEqual(
             set(contract["check_statuses"]),
             set(self.ontology["dimensions"]["mandatory_check_status"]),
@@ -150,6 +151,7 @@ class SchemaConsistencyTests(unittest.TestCase):
             ("proposal_context_modes", "proposal_context_mode"),
             ("baseline_scope_statuses", "baseline_scope_status"),
             ("as_is_match_statuses", "as_is_match_status"),
+            ("fact_decision_treatments", "fact_decision_treatment"),
             ("context_conflict_statuses", "context_conflict_status"),
             ("decision_criterion_kinds", "decision_criterion_kind"),
             ("alternative_comparison_statuses", "alternative_comparison_status"),
