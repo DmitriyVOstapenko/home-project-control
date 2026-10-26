@@ -1,14 +1,14 @@
 {
   "schema_version": "1.0",
   "catalog_id": "home-project-control-ru-official-regulatory-sources",
-  "updated_at": "2026-08-31T12:11:33.462997+00:00",
+  "updated_at": "2026-10-26T10:04:03.968665+00:00",
   "sources": {
     "rosstandart-federal-fund": {
       "source_id": "rosstandart-federal-fund",
       "url": "https://protect.gost.ru/gost?month=0&year=0",
-      "checked_at": "2026-08-31T12:11:33.462997+00:00",
+      "checked_at": "2026-10-26T10:04:03.968665+00:00",
       "http_status": 200,
-      "content_sha256": "f065cbb8e75d30a30b3fd16d0be063569f6e626869d2e7394d28478c5d0998fc",
+      "content_sha256": "986a94a5e93ec6f1ce8db310bdff5a51ca9874ebf31debb6479fd5845dae4e29",
       "content_length": 172902,
       "fingerprint_length": 16184,
       "fingerprint_mode": "html_visible_text",
